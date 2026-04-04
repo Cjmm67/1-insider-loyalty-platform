@@ -1,4 +1,3 @@
-import './storagePolyfill.js'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import OneInsiderPlatform from './OneInsiderPlatform.jsx'
