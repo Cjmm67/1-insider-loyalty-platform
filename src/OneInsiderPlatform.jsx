@@ -282,7 +282,7 @@ export default function OneInsiderPlatform() {
       {/* ─── BODY ───────────────────────────────────────────────────────── */}
       <main style={S.main} className="fade-in">
         {tab === "overview" && <OverviewTab stats={stats} tierData={tierData} monthlyData={monthlyData} catPopularity={catPopularity} venueData={venueData} members={members} setTab={setTab} />}
-        {tab === "members" && <MembersTab members={filteredMembers} searchQ={searchQ} setSearchQ={setSearchQ} selectedMember={selectedMember} setSelectedMember={setSelectedMember} setModal={setModal} tiers={tiers} />}
+        {tab === "members" && <MembersTab members={filteredMembers} searchQ={searchQ} setSearchQ={setSearchQ} selectedMember={selectedMember} setSelectedMember={setSelectedMember} setModal={setModal} tiers={tiers} setMembers={setMembers} />}
         {tab === "rewards" && <RewardsTab rewards={rewards} setRewards={setRewards} callAI={callAI} aiLoading={aiLoading} aiResult={aiResult} setAiResult={setAiResult} />}
         {tab === "tiers" && <TiersTab tiers={tiers} setTiers={setTiers} stats={stats} tierData={tierData} />}
         {tab === "analytics" && <AnalyticsTab stats={stats} tierData={tierData} monthlyData={monthlyData} catPopularity={catPopularity} venueData={venueData} members={members} rewards={rewards} />}
@@ -433,9 +433,28 @@ function OverviewTab({ stats, tierData, monthlyData, catPopularity, venueData, m
 // ═══════════════════════════════════════════════════════════════════════════════
 // TAB: MEMBERS
 // ═══════════════════════════════════════════════════════════════════════════════
-function MembersTab({ members, searchQ, setSearchQ, selectedMember, setSelectedMember, setModal, tiers }) {
+function MembersTab({ members, searchQ, setSearchQ, selectedMember, setSelectedMember, setModal, tiers, setMembers }) {
   const [filterTier, setFilterTier] = useState("all");
+  const [adjusting, setAdjusting] = useState(false);
+  const [adjustAmount, setAdjustAmount] = useState("");
+  const [adjustReason, setAdjustReason] = useState("manual");
+  const [adjustSaving, setAdjustSaving] = useState(false);
+  const [adjustSuccess, setAdjustSuccess] = useState(false);
   const filtered = members.filter(m => filterTier === "all" || m.tier === filterTier);
+
+  const handleAdjustPoints = async () => {
+    if (!selectedMember || !adjustAmount) return;
+    setAdjustSaving(true);
+    const newPoints = Math.max(0, parseInt(adjustAmount) || 0);
+    await db.updateMember(selectedMember.id, { points: newPoints });
+    // Refresh members from Supabase
+    const fresh = await db.getMembers();
+    setMembers(fresh);
+    setSelectedMember({ ...selectedMember, points: newPoints });
+    setAdjustSaving(false);
+    setAdjustSuccess(true);
+    setTimeout(() => { setAdjustSuccess(false); setAdjusting(false); }, 1500);
+  };
 
   return (
     <div className="fade-in">
@@ -511,10 +530,58 @@ function MembersTab({ members, searchQ, setSearchQ, selectedMember, setSelectedM
               <div><span style={{...S.statLabel,display:"block",marginBottom:4}}>Member Since</span><span style={S.body}>{fmtDate(selectedMember.signupDate)}</span></div>
             </div>
             <div style={{marginTop:20,display:"flex",gap:8}}>
-              <button style={S.btn("primary")}>Adjust Points</button>
+              <button style={S.btn("primary")} onClick={()=>{setAdjusting(true);setAdjustAmount(String(selectedMember.points));setAdjustSuccess(false);}}>Adjust Points</button>
               <button style={S.btn("gold")}>Send Reward</button>
               <button style={S.btn("ghost")}>View Activity</button>
             </div>
+
+            {/* ADJUST POINTS PANEL */}
+            {adjusting && (
+              <div style={{marginTop:16,padding:20,background:"#fafaf5",borderRadius:10,border:"1px solid #e8e4dc"}}>
+                {!adjustSuccess ? (
+                  <>
+                    <div style={{fontSize:13,fontWeight:600,fontFamily:"'DM Sans',sans-serif",marginBottom:12,color:"#1A1A1A"}}>Adjust Points for {selectedMember.name}</div>
+                    <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:12}}>
+                      <div style={{flex:1}}>
+                        <label style={{fontSize:10,fontFamily:"'DM Sans',sans-serif",textTransform:"uppercase",letterSpacing:1,color:"#888",display:"block",marginBottom:4}}>Current Points</label>
+                        <div style={{fontSize:22,fontWeight:700,color:"#C5A258",fontFamily:"'Cormorant Garamond',Georgia,serif"}}>{fmtNum(selectedMember.points)}</div>
+                      </div>
+                      <div style={{fontSize:18,color:"#ccc",paddingBottom:4}}>→</div>
+                      <div style={{flex:1}}>
+                        <label style={{fontSize:10,fontFamily:"'DM Sans',sans-serif",textTransform:"uppercase",letterSpacing:1,color:"#888",display:"block",marginBottom:4}}>New Points</label>
+                        <input type="number" style={{...S.input,fontSize:18,fontWeight:700,textAlign:"center"}} value={adjustAmount} onChange={e=>setAdjustAmount(e.target.value)} autoFocus />
+                      </div>
+                    </div>
+                    <div style={{marginBottom:12}}>
+                      <label style={{fontSize:10,fontFamily:"'DM Sans',sans-serif",textTransform:"uppercase",letterSpacing:1,color:"#888",display:"block",marginBottom:4}}>Reason</label>
+                      <select style={S.select} value={adjustReason} onChange={e=>setAdjustReason(e.target.value)}>
+                        <option value="manual">Manual Adjustment</option>
+                        <option value="correction">Points Correction</option>
+                        <option value="goodwill">Goodwill Credit</option>
+                        <option value="promotion">Promotional Bonus</option>
+                        <option value="refund">Refund / Void Reversal</option>
+                      </select>
+                    </div>
+                    {adjustAmount && parseInt(adjustAmount) !== selectedMember.points && (
+                      <div style={{padding:"8px 12px",borderRadius:6,background:parseInt(adjustAmount)>selectedMember.points?"#E8F5E9":"#FFF3E0",fontSize:12,fontFamily:"'DM Sans',sans-serif",color:parseInt(adjustAmount)>selectedMember.points?"#2E7D32":"#E65100",marginBottom:12}}>
+                        {parseInt(adjustAmount) > selectedMember.points ? "+" : ""}{parseInt(adjustAmount) - selectedMember.points} points ({adjustReason})
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:8}}>
+                      <button style={S.btn("primary")} onClick={handleAdjustPoints} disabled={adjustSaving || !adjustAmount}>
+                        {adjustSaving ? "Saving…" : "Save to Supabase"}
+                      </button>
+                      <button style={S.btn("ghost")} onClick={()=>setAdjusting(false)}>Cancel</button>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{textAlign:"center",padding:"12px 0"}}>
+                    <div style={{fontSize:24,marginBottom:8}}>✓</div>
+                    <div style={{fontSize:14,fontWeight:600,fontFamily:"'DM Sans',sans-serif",color:"#2E7D32"}}>Points updated — synced to member portal</div>
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{marginTop:16,textAlign:"right"}}><button style={S.btn("ghost")} onClick={()=>setSelectedMember(null)}>Close</button></div>
           </div>
         </div>
