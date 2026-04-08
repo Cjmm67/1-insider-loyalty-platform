@@ -1,875 +1,853 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend, AreaChart, Area } from "recharts";
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
 
-// ─── CONSTANTS ───────────────────────────────────────────────────────────────
-const VENUES = [
-  { id:"oumi", name:"Oumi", cat:"Restaurants", loc:"CapitaSpring Lvl 51", cuisine:"Modern Japanese Omakase" },
-  { id:"kaarla", name:"Kaarla", cat:"Restaurants", loc:"CapitaSpring Lvl 51", cuisine:"Modern Australian" },
-  { id:"solluna", name:"Sol & Luna", cat:"Restaurants", loc:"CapitaSpring Lvl 51", cuisine:"Mediterranean" },
-  { id:"camille", name:"Camille", cat:"Restaurants", loc:"CapitaSpring Lvl 51", cuisine:"French" },
-  { id:"fire", name:"FIRE", cat:"Restaurants", loc:"One Fullerton", cuisine:"Modern Grill" },
-  { id:"monti", name:"Monti", cat:"Restaurants", loc:"Fullerton Pavilion", cuisine:"Italian" },
-  { id:"flnt", name:"FLNT", cat:"Restaurants", loc:"CapitaSpring Lvl 51", cuisine:"Flint-fired Contemporary" },
-  { id:"botanico", name:"Botanico", cat:"Restaurants", loc:"Botanic Gardens", cuisine:"Modern European" },
-  { id:"mimi", name:"Mimi", cat:"Restaurants", loc:"Clarke Quay", cuisine:"Pan-Asian" },
-  { id:"una", name:"UNA", cat:"Restaurants", loc:"Rochester Commons", cuisine:"Italian" },
-  { id:"yang", name:"Yang", cat:"Restaurants", loc:"1-Altitude", cuisine:"Contemporary Asian" },
-  { id:"zorba", name:"Zorba", cat:"Restaurants", loc:"The Summerhouse", cuisine:"Greek" },
-  { id:"alfaro", name:"1-Alfaro", cat:"Restaurants", loc:"Raffles Place", cuisine:"Spanish" },
-  { id:"coast", name:"1-Altitude Coast", cat:"Bars", loc:"One Fullerton Rooftop" },
-  { id:"arden", name:"1-Arden Bar", cat:"Bars", loc:"CapitaSpring" },
-  { id:"1918", name:"1918 Heritage Bar", cat:"Bars", loc:"The Riverhouse" },
-  { id:"solora", name:"Sol & Ora", cat:"Bars", loc:"CapitaSpring" },
-  { id:"pixies", name:"Pixies", cat:"Bars", loc:"Portfolio" },
-  { id:"wsbar", name:"Wildseed Bar", cat:"Bars", loc:"The Summerhouse" },
-  { id:"wscafe-fh", name:"Wildseed Café @ 1-Flowerhill", cat:"Cafés", loc:"1-Flowerhill" },
-  { id:"wscafe-sh", name:"Wildseed Café @ The Summerhouse", cat:"Cafés", loc:"The Summerhouse" },
-  { id:"wscafe-am", name:"Wildseed Café @ The Alkaff Mansion", cat:"Cafés", loc:"The Alkaff Mansion" },
-  { id:"wscafe-bg", name:"Wildseed Café @ SBG", cat:"Cafés", loc:"Singapore Botanic Gardens" },
-  { id:"melaka", name:"1-Altitude Melaka", cat:"Bars", loc:"Melaka, Malaysia" },
-];
-
-const CAFE_OUTLETS = VENUES.filter(v => v.cat === "Cafés");
-
-const TIERS = [
-  { id:"silver", name:"Silver", hex:"#A8A8A8", bg:"#F7F7F7", threshold:0, earn:1.0, paid:false, benefits:["Base earn rate (1pt/$1)","Birthday dessert or drink","Welcome voucher on signup","Café stamp card","Gift card access"], desc:"Free entry" },
-  { id:"gold", name:"Gold", hex:"#C5A258", bg:"#FDF8EE", threshold:0, earn:1.5, paid:true, benefits:["Enhanced earn rate (1.5×)","Priority reservations","Upgraded birthday rewards","Exclusive event access","Unlimited dining vouchers (calendar-year)","Welcome voucher on signup"], desc:"Paid annual" },
-  { id:"platinum", name:"Platinum", hex:"#5C5C5C", bg:"#2D2D2D", threshold:0, earn:2.0, paid:true, benefits:["Premium earn rate (2×)","VIP reservations","Premium birthday experience","Concierge service","Unlimited dining vouchers (calendar-year)","Partner benefits","Chef's table access"], desc:"Paid annual" },
-  { id:"corporate", name:"Corporate", hex:"#1A3A5C", bg:"#E8EFF5", threshold:0, earn:1.5, paid:true, benefits:["Corporate earn rate (1.5×)","Unlimited dining vouchers (calendar-year)","Bulk gift cards","Event coordination","Dedicated account manager"], desc:"Corporate plan" },
-  { id:"staff", name:"Staff", hex:"#2E7D32", bg:"#E8F5E9", threshold:0, earn:1.0, paid:false, benefits:["Staff dining vouchers","Birthday reward","Internal event access","Staff-only promotions"], desc:"Internal" },
-];
-
-const CATEGORIES = [
-  { id:"cafes", name:"Cafés", icon:"☕", color:"#7B9E6B" },
-  { id:"restaurants", name:"Restaurants", icon:"🍽️", color:"#B85C38" },
-  { id:"bars", name:"Bars", icon:"🍸", color:"#6B4E8B" },
-  { id:"wines", name:"Wines", icon:"🍷", color:"#8B2252" },
-];
-
-const STAMP_THRESHOLDS = [
-  { stamp:3, autoIssue:false, label:"Manual claim (Discover tab)" },
-  { stamp:5, autoIssue:false, label:"Manual claim (Discover tab)" },
-  { stamp:6, autoIssue:false, label:"Manual claim (Discover tab)" },
-  { stamp:8, autoIssue:true, label:"Auto-issued" },
-  { stamp:10, autoIssue:true, label:"Auto-issued" },
-];
-
-const genId = () => Math.random().toString(36).slice(2,10);
-const fmtDate = d => new Date(d).toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric'});
-const fmtNum = n => new Intl.NumberFormat('en-SG').format(n);
-const fmtCur = n => `$${new Intl.NumberFormat('en-SG',{minimumFractionDigits:2}).format(n)}`;
-
-// ─── SEED DATA ──────────────────────────────────────────────────────────────
-const seedMembers = () => {
-  const names=["Sophia Chen","Marcus Tan","Priya Sharma","James Lim","Aiko Yamamoto","David Ng","Rachel Lee","Benjamin Koh","Mei Ling Wong","Arjun Patel","Sarah Teo","Kevin Chong","Yuki Sato","Daniel Chua","Amanda Goh","Ryan Ong","Michelle Foo","Ethan Yeo","Nicole Tan","Chris Wee","Jessica Ang","Patrick Loh","Vivian Sim","Alex Ho","Catherine Tay","Derek Soh","Emily Chew","Fabian Lim","Grace Tan","Henry Seah"];
-  const tierMap=["silver","silver","silver","silver","silver","silver","silver","silver","silver","silver","silver","silver","silver","silver","silver","gold","gold","gold","gold","gold","gold","gold","gold","platinum","platinum","platinum","platinum","corporate","corporate","staff"];
-  const cats=["cafes","restaurants","bars","wines"];
-  return names.map((name,i)=>({
-    id:`M${String(i+1).padStart(4,'0')}`, name,
-    mobile:`+65 9${String(Math.floor(Math.random()*9e6+1e6))}`,
-    tier:tierMap[i],
-    points:tierMap[i]==='platinum'?Math.floor(Math.random()*5000+3000):tierMap[i]==='gold'?Math.floor(Math.random()*3000+1000):Math.floor(Math.random()*1500+100),
-    totalSpend:tierMap[i]==='platinum'?Math.floor(Math.random()*20000+8000):tierMap[i]==='gold'?Math.floor(Math.random()*8000+3000):Math.floor(Math.random()*3000+200),
-    categoryPref:cats[i%4], birthdayMonth:(i%12)+1,
-    signupDate:new Date(2024,Math.floor(Math.random()*12),Math.floor(Math.random()*28)+1).toISOString(),
-    lastVisit:new Date(2025,Math.floor(Math.random()*4),Math.floor(Math.random()*28)+1).toISOString(),
-    visits:Math.floor(Math.random()*40+2),
-    favouriteVenue:VENUES[i%VENUES.length].id,
-    email:`${name.toLowerCase().replace(' ','.')}@email.com`,
-    stamps:tierMap[i]==='silver'||tierMap[i]==='gold'?Math.floor(Math.random()*10):0,
-    voucherSetsUsed:tierMap[i]==='gold'||tierMap[i]==='platinum'?Math.floor(Math.random()*4+1):0,
-    membershipExpiry:tierMap[i]==='gold'||tierMap[i]==='platinum'||tierMap[i]==='corporate'?new Date(2026,Math.floor(Math.random()*12),Math.floor(Math.random()*28)+1).toISOString():null,
-    renewalStatus:null,
-  }));
-};
-
-const seedDecisions = () => [
-  { id:genId(), decision:"Bar applicability for dining vouchers", status:"OPEN", owner:"Brendon", notes:"WSB check size reference shared — awaiting confirmation", created:"2026-03-15" },
-  { id:genId(), decision:"Staff tier full mechanics", status:"OPEN", owner:"Marketing", notes:"Must share with Eber before config can begin", created:"2026-03-20" },
-  { id:genId(), decision:"Stamp card time-restriction duration", status:"OPEN", owner:"Marketing", notes:"Pending café spend data analysis to determine optimal window", created:"2026-03-22" },
-  { id:genId(), decision:"Automated membership renewal", status:"CLOSED", owner:"Eber", notes:"Rejected — risk of refund requests. Using manual renewal flow with reminders.", created:"2026-02-10" },
-];
-
-const seedPromotions = () => [
-  { id:genId(), name:"Easter Double Points", start:"2026-04-03", end:"2026-04-06", outlets:["all"], type:"double_points", exclusionApplied:true, revertDate:"2026-04-07", status:"completed" },
-  { id:genId(), name:"Mother's Day Bonus", start:"2026-05-10", end:"2026-05-11", outlets:["oumi","camille","solluna","kaarla"], type:"bonus_500pts", exclusionApplied:false, revertDate:"2026-05-12", status:"upcoming" },
-  { id:genId(), name:"Café Launch Week", start:"2026-06-01", end:"2026-06-07", outlets:["wscafe-fh","wscafe-sh","wscafe-am","wscafe-bg"], type:"triple_stamps", exclusionApplied:false, revertDate:"2026-06-08", status:"draft" },
-];
-
-const seedVouchers = () => [
-  { id:genId(), name:"Welcome $10 Voucher", type:"welcome", tiers:["silver","gold","platinum","corporate","staff"], autoIssue:true, trigger:"signup", value:10, validity:"30 days", stackable:false, status:"active" },
-  { id:genId(), name:"Gold Dining $20 Voucher", type:"dining", tiers:["gold"], autoIssue:true, trigger:"first_set", value:20, validity:"Calendar year", stackable:false, status:"active", unlimitedClaim:true },
-  { id:genId(), name:"Platinum Dining $30 Voucher", type:"dining", tiers:["platinum"], autoIssue:true, trigger:"first_set", value:30, validity:"Calendar year", stackable:false, status:"active", unlimitedClaim:true },
-  { id:genId(), name:"Corporate Dining $25 Voucher", type:"dining", tiers:["corporate"], autoIssue:true, trigger:"first_set", value:25, validity:"Calendar year", stackable:false, status:"active", unlimitedClaim:true },
-  { id:genId(), name:"Points Reward $15 Voucher", type:"points_reward", tiers:["silver","gold","platinum"], autoIssue:false, trigger:"500pts", value:15, validity:"60 days", stackable:false, status:"active" },
-  { id:genId(), name:"Birthday $25 Voucher", type:"birthday", tiers:["gold","platinum"], autoIssue:true, trigger:"birthday_month", value:25, validity:"Birthday month", stackable:false, status:"active" },
-];
-
-const seedStaffRegistry = () => [
-  { name:"Ahmad bin Ismail", personalMobile:"+65 91234567", staffMobile:"+65 91234567", tier:"staff", status:"active", notes:"Converted from Silver" },
-  { name:"Lisa Tan", personalMobile:"+65 98765432", staffMobile:"+65 81112222", tier:"staff", status:"active", notes:"Uses separate staff number" },
-  { name:"Raj Kumar", personalMobile:null, staffMobile:"+65 90001111", tier:"staff", status:"active", notes:"No prior personal account" },
-];
-
-// ─── TYPOGRAPHY & STYLES ────────────────────────────────────────────────────
-const font = {
-  h: "'Playfair Display', Georgia, serif",
-  b: "'DM Sans', system-ui, sans-serif",
-  m: "'JetBrains Mono', monospace",
-};
-
-const S = {
-  app: { fontFamily:font.b, background:"#FAF8F5", minHeight:"100vh", color:"#1A1A1A", fontSize:13 },
-  header: { background:"#111", padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:58, position:"sticky", top:0, zIndex:100 },
-  logo: { color:"#C5A258", fontSize:22, fontWeight:700, letterSpacing:2.5, fontFamily:font.h },
-  badge: { fontSize:9, letterSpacing:1.5, textTransform:"uppercase", color:"#666", marginLeft:12 },
-  nav: { display:"flex", gap:0, height:"100%", overflowX:"auto" },
-  navBtn: a => ({ background:"none", border:"none", color:a?"#C5A258":"#777", padding:"0 14px", cursor:"pointer", fontSize:11, letterSpacing:.6, textTransform:"uppercase", fontFamily:font.b, fontWeight:a?600:400, borderBottom:a?"2px solid #C5A258":"2px solid transparent", height:"100%", display:"flex", alignItems:"center", transition:"all .2s", whiteSpace:"nowrap" }),
-  main: { maxWidth:1440, margin:"0 auto", padding:"28px 32px" },
-  card: { background:"#fff", borderRadius:12, padding:24, boxShadow:"0 1px 8px rgba(0,0,0,.04)", marginBottom:18, border:"1px solid rgba(0,0,0,.04)" },
-  cardT: { fontSize:15, fontWeight:600, marginBottom:14, fontFamily:font.h, letterSpacing:.3, color:"#1A1A1A" },
-  grid: c => ({ display:"grid", gridTemplateColumns:`repeat(${c},1fr)`, gap:16 }),
-  stat: { background:"#fff", borderRadius:12, padding:"20px 24px", boxShadow:"0 1px 8px rgba(0,0,0,.04)", border:"1px solid rgba(0,0,0,.04)", transition:"all .2s" },
-  statL: { fontSize:10, color:"#999", textTransform:"uppercase", letterSpacing:1.2, marginBottom:5, fontWeight:500 },
-  statV: { fontSize:28, fontWeight:700, fontFamily:font.h, color:"#1A1A1A" },
-  tier: t => ({ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 10px", borderRadius:16, fontSize:10, fontWeight:600, letterSpacing:.6, textTransform:"uppercase", background:t==='platinum'?"#2D2D2D":t==='gold'?"#FDF8EE":t==='corporate'?"#E8EFF5":t==='staff'?"#E8F5E9":"#F5F5F5", color:t==='platinum'?"#fff":t==='gold'?"#8B6914":t==='corporate'?"#1A3A5C":t==='staff'?"#2E7D32":"#666" }),
-  dot: t => ({ width:7, height:7, borderRadius:"50%", background:TIERS.find(x=>x.id===t)?.hex||"#ccc" }),
-  btn: (v="primary") => ({ padding:"8px 20px", borderRadius:8, border:"none", cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:font.b, letterSpacing:.4, transition:"all .2s", ...(v==="primary"?{background:"#111",color:"#C5A258"}:v==="gold"?{background:"#C5A258",color:"#fff"}:v==="danger"?{background:"#D32F2F",color:"#fff"}:v==="success"?{background:"#2E7D32",color:"#fff"}:{background:"transparent",color:"#333",border:"1px solid #ddd"}) }),
-  input: { padding:"8px 14px", borderRadius:8, border:"1px solid #ddd", fontSize:12, fontFamily:font.b, outline:"none", width:"100%", boxSizing:"border-box" },
-  select: { padding:"8px 14px", borderRadius:8, border:"1px solid #ddd", fontSize:12, fontFamily:font.b, outline:"none", background:"#fff", cursor:"pointer" },
-  table: { width:"100%", borderCollapse:"collapse", fontSize:12, fontFamily:font.b },
-  th: { textAlign:"left", padding:"10px 14px", borderBottom:"2px solid #eee", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:"#999", fontWeight:600 },
-  td: { padding:"10px 14px", borderBottom:"1px solid #f5f5f5" },
-  tag: (bg,fg) => ({ display:"inline-block", padding:"2px 9px", borderRadius:10, fontSize:10, fontWeight:500, background:bg, color:fg }),
-  modal: { position:"fixed", inset:0, background:"rgba(0,0,0,.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200, backdropFilter:"blur(4px)" },
-  modalC: { background:"#fff", borderRadius:16, padding:32, maxWidth:620, width:"92%", maxHeight:"85vh", overflowY:"auto", boxShadow:"0 24px 64px rgba(0,0,0,.2)" },
-  ai: { background:"linear-gradient(135deg,#111 0%,#1a180f 100%)", borderRadius:12, padding:24, color:"#fff", position:"relative", overflow:"hidden" },
-  aiL: { display:"inline-flex", alignItems:"center", gap:5, padding:"3px 10px", borderRadius:10, fontSize:9.5, fontWeight:600, letterSpacing:1.2, textTransform:"uppercase", background:"rgba(197,162,88,.2)", color:"#C5A258", marginBottom:12 },
-  sDot: s => ({ width:7, height:7, borderRadius:"50%", display:"inline-block", background:s==='active'||s==='completed'?"#4CAF50":s==='upcoming'?"#2196F3":s==='draft'?"#FF9800":"#999" }),
-  warn: { background:"#FFF8E1", border:"1px solid #FFE082", borderRadius:10, padding:"14px 18px", fontSize:12, color:"#5D4037", display:"flex", gap:10, alignItems:"flex-start", marginBottom:16, lineHeight:1.5 },
-  limit: { background:"#FFEBEE", border:"1px solid #EF9A9A", borderRadius:10, padding:"14px 18px", fontSize:12, color:"#B71C1C", display:"flex", gap:10, alignItems:"flex-start", marginBottom:16, lineHeight:1.5 },
-  ok: { background:"#E8F5E9", border:"1px solid #A5D6A7", borderRadius:10, padding:"14px 18px", fontSize:12, color:"#1B5E20", display:"flex", gap:10, alignItems:"flex-start", marginBottom:16, lineHeight:1.5 },
-};
-
-// ─── SUPABASE + STORAGE ──────────────────────────────────────────────────────
+// ─── Supabase ───
 const SUPA_URL = "https://tobtmtshxgpkkucsaxyk.supabase.co";
 const SUPA_KEY = "sb_publishable_M_yQLmU_5yc0yTccm4F_oA_xWKyTqx9";
 const supaFetch = async (path, opts = {}) => {
   const res = await fetch(`${SUPA_URL}/rest/v1/${path}`, {
-    headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": "application/json", "Prefer": opts.prefer || "return=representation", ...opts.headers },
+    headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}`, "Content-Type": "application/json", Prefer: opts.prefer || "return=representation" },
     method: opts.method || "GET", body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   return res.json();
 };
-const mapMember = m => ({
-  id:m.id, name:m.name, mobile:m.mobile, email:m.email, tier:m.tier, points:m.points,
-  totalSpend:m.total_spend||0, categoryPref:m.category_pref||"restaurants", birthdayMonth:m.birthday_month||1,
-  signupDate:m.signup_date||m.created_at, lastVisit:m.last_visit||m.created_at, visits:m.visits||0,
-  favouriteVenue:m.favourite_venue||"oumi", stamps:m.stamps||0, voucherSetsUsed:m.voucher_sets_used||0,
-  membershipExpiry:m.membership_expiry||null, renewalStatus:m.renewal_status||null,
-});
-const db = {
-  async getMembers(){ try{ const d=await supaFetch("members?order=id.asc"); return Array.isArray(d)?d.map(mapMember):[]; }catch{ return []; }},
-  async getRewards(){ try{ const d=await supaFetch("rewards?active=eq.true"); return Array.isArray(d)?d:[]; }catch{ return []; }},
-  async getTransactions(memberId){ try{ const d=await supaFetch(`transactions?member_id=eq.${memberId}&order=created_at.desc`); return Array.isArray(d)?d:[]; }catch{ return []; }},
-};
-// For admin-only data (decisions, promotions, vouchers, staff) use window.storage
-const store = {
-  async get(k){ try{ const r=await window.storage.get(k); return r?JSON.parse(r.value):null }catch{ return null }},
-  async set(k,v){ try{ await window.storage.set(k,JSON.stringify(v)); return true }catch{ return false }},
+
+// ─── Claude API ───
+const askClaude = async (system, user) => {
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system, messages: [{ role: "user", content: user }] }),
+  });
+  const d = await r.json();
+  return d.content?.map(b => b.text || "").join("\n") || "No response";
 };
 
-// ─── MAIN APP ────────────────────────────────────────────────────────────────
-export default function OneInsiderPlatform() {
-  const [tab,setTab]=useState("overview");
-  const [members,setMembers]=useState([]);
-  const [decisions,setDecisions]=useState([]);
-  const [promotions,setPromotions]=useState([]);
-  const [vouchers,setVouchers]=useState([]);
-  const [staffReg,setStaffReg]=useState([]);
-  const [loading,setLoading]=useState(true);
-  const [aiLoading,setAiLoading]=useState(false);
-  const [aiResult,setAiResult]=useState(null);
-  const [selectedMember,setSelectedMember]=useState(null);
-  const [searchQ,setSearchQ]=useState("");
+// ─── Brand Tokens ───
+const C = { gold: "#C5A258", dark: "#111", bg: "#FAF8F5", text: "#1A1A1A", muted: "#888", lmuted: "#999" };
+const TIER = {
+  silver: { hex: "#A8A8A8", bg: "#F7F7F7", txt: "#666", grad: "linear-gradient(135deg,#e8e8e8,#d0d0d0)" },
+  gold: { hex: "#C5A258", bg: "#FDF8EE", txt: "#8B6914", grad: "linear-gradient(135deg,#C5A258,#D4B978 50%,#A88B3A)" },
+  platinum: { hex: "#5C5C5C", bg: "#2D2D2D", txt: "#fff", grad: "linear-gradient(135deg,#3a3a3a,#1a1a1a 50%,#4a4a4a)" },
+  corporate: { hex: "#1A3A5C", bg: "#E8EFF5", txt: "#1A3A5C", grad: "linear-gradient(135deg,#1A3A5C,#2A5A8C)" },
+  staff: { hex: "#2E7D32", bg: "#E8F5E9", txt: "#2E7D32", grad: "linear-gradient(135deg,#2E7D32,#4CAF50)" },
+};
+const CAT_CLR = { "Cafés": "#7B9E6B", Restaurants: "#B85C38", Bars: "#6B4E8B", Wines: "#8B2252" };
+const FONT = { h: "'Playfair Display',Georgia,serif", b: "'DM Sans',system-ui,sans-serif", m: "'JetBrains Mono',monospace" };
 
-  useEffect(()=>{(async()=>{
-    // Members from Supabase (shared with member portal)
-    let m=await db.getMembers();
-    if(!m.length){m=seedMembers();} // fallback to seed if DB empty
-    setMembers(m);
-    // Admin-only data from window.storage
-    let d=await store.get("eber-decisions"); if(!d||!d.length){d=seedDecisions();await store.set("eber-decisions",d)} setDecisions(d);
-    let p=await store.get("eber-promotions"); if(!p||!p.length){p=seedPromotions();await store.set("eber-promotions",p)} setPromotions(p);
-    let v=await store.get("eber-vouchers"); if(!v||!v.length){v=seedVouchers();await store.set("eber-vouchers",v)} setVouchers(v);
-    let s=await store.get("eber-staff"); if(!s||!s.length){s=seedStaffRegistry();await store.set("eber-staff",s)} setStaffReg(s);
-    setLoading(false);
-  })()},[]);
+// ─── Venues ───
+const VENUES = [
+  {id:"oumi",name:"Oumi",category:"Restaurants",location:"CapitaSpring Lvl 51",stamps:false,points:true},
+  {id:"kaarla",name:"Kaarla",category:"Restaurants",location:"CapitaSpring Lvl 51",stamps:false,points:true},
+  {id:"solluna",name:"Sol & Luna",category:"Restaurants",location:"CapitaSpring Lvl 51",stamps:false,points:true},
+  {id:"camille",name:"Camille",category:"Restaurants",location:"CapitaSpring Lvl 51",stamps:false,points:true},
+  {id:"fire",name:"FIRE",category:"Restaurants",location:"One Fullerton",stamps:false,points:true},
+  {id:"monti",name:"Monti",category:"Restaurants",location:"Fullerton Pavilion",stamps:false,points:true},
+  {id:"flnt",name:"FLNT",category:"Restaurants",location:"CapitaSpring Lvl 51",stamps:false,points:true},
+  {id:"botanico",name:"Botanico",category:"Restaurants",location:"Singapore Botanic Gardens",stamps:false,points:true},
+  {id:"mimi",name:"Mimi",category:"Restaurants",location:"Clarke Quay",stamps:false,points:true},
+  {id:"una",name:"UNA",category:"Restaurants",location:"Rochester Commons",stamps:false,points:true},
+  {id:"yang",name:"Yang",category:"Restaurants",location:"1-Altitude",stamps:false,points:true},
+  {id:"zorba",name:"Zorba",category:"Restaurants",location:"The Summerhouse",stamps:false,points:true},
+  {id:"alfaro",name:"1-Alfaro",category:"Restaurants",location:"Raffles Place",stamps:false,points:true},
+  {id:"coast",name:"1-Altitude Coast",category:"Bars",location:"One Fullerton Rooftop",stamps:false,points:true},
+  {id:"arden",name:"1-Arden Bar",category:"Bars",location:"CapitaSpring",stamps:false,points:true},
+  {id:"1918",name:"1918 Heritage Bar",category:"Bars",location:"The Riverhouse",stamps:false,points:true},
+  {id:"solora",name:"Sol & Ora",category:"Bars",location:"CapitaSpring",stamps:false,points:true},
+  {id:"pixies",name:"Pixies",category:"Bars",location:"Portfolio",stamps:false,points:true},
+  {id:"wsbar",name:"Wildseed Bar",category:"Bars",location:"The Summerhouse",stamps:false,points:true},
+  {id:"wscafe-fh",name:"Wildseed Café @ 1-Flowerhill",category:"Cafés",location:"1-Flowerhill",stamps:true,points:false},
+  {id:"wscafe-sh",name:"Wildseed Café @ The Summerhouse",category:"Cafés",location:"The Summerhouse",stamps:true,points:false},
+  {id:"wscafe-am",name:"Wildseed Café @ The Alkaff Mansion",category:"Cafés",location:"The Alkaff Mansion",stamps:true,points:false},
+  {id:"wscafe-bg",name:"Wildseed Café @ Singapore Botanic Gardens",category:"Cafés",location:"Singapore Botanic Gardens",stamps:true,points:false},
+  {id:"melaka",name:"1-Altitude Melaka",category:"Bars",location:"Melaka, Malaysia",stamps:false,points:true},
+];
+const CAFE_OUTLETS = VENUES.filter(v => v.stamps);
 
-  // Refresh members from Supabase when switching to members/overview tab
-  const refreshMembers = async () => { const m=await db.getMembers(); if(m.length) setMembers(m); };
-  const handleTab = (t) => { setTab(t); if(t==="members"||t==="overview") refreshMembers(); };
+// ─── Stamp Milestones ───
+const STAMPS = [
+  {s:1},{s:2},
+  {s:3,reward:"1-for-1 main lunch set",auto:false},
+  {s:4},
+  {s:5,reward:"Complimentary cake of the day",auto:false},
+  {s:6,reward:"1-for-1 pasta",auto:false},
+  {s:7},
+  {s:8,reward:"20% off dine-in",auto:true},
+  {s:9},
+  {s:10,reward:"Mixed Berry Croffle",auto:true},
+];
 
-  const callAI = async (prompt, sys) => {
-    setAiLoading(true); setAiResult(null);
+// ─── Tier Data ───
+const TIERS_DATA = [
+  {id:"silver",name:"Silver",fee:0,paid:false,earn:"$1 = 1 pt",bday:"10%",vouchers:"1×$10 welcome",nonStop:false,benefits:["Base earn rate","10% birthday discount","1×$10 welcome voucher","Café stamps","Gift cards","Monthly acquisition bonus"]},
+  {id:"gold",name:"Paid Gold",fee:40,paid:true,earn:"$1 = 1.5 pts",bday:"15%",vouchers:"10×$20 dining",nonStop:true,benefits:["Enhanced earn rate","15% birthday discount","10×$20 Non-Stop Hits","Priority reservations","Exclusive events","Café stamps"]},
+  {id:"platinum",name:"Paid Platinum",fee:80,paid:true,earn:"$1 = 2 pts",bday:"20%",vouchers:"10×$25 dining",nonStop:true,benefits:["Premium earn rate","20% birthday discount","10×$25 Non-Stop Hits","VIP reservations","Concierge","Chef's table"]},
+  {id:"corporate",name:"Corporate",fee:null,paid:true,earn:"$1 = 1.5 pts",bday:"15%",vouchers:"10×$20 dining",nonStop:true,benefits:["Corporate earn rate","15% birthday discount","10×$20 Non-Stop Hits","Bulk gift cards","Event coordination","Dedicated account mgr"]},
+  {id:"staff",name:"Staff",fee:0,paid:false,earn:"$1 = 1 pt",bday:"TBC",vouchers:"TBC",nonStop:false,benefits:["Staff dining vouchers","Birthday reward TBC","Internal events","Staff-only promos"]},
+];
+
+// ─── Eber Limitations ───
+const LIMITATIONS = [
+  {id:"L01",text:"No tier benefits on purchase page",fix:"AI-generated benefits page outside purchase flow",sev:"medium"},
+  {id:"L02",text:"No auto-renewal",fix:"Gmail MCP reminders at 30d/7d/1d",sev:"high"},
+  {id:"L03",text:"Mobile OTP only (no email)",fix:"Raise as dev request with Eber",sev:"medium"},
+  {id:"L04",text:"Cannot exclude promo items from points",fix:"Manual backend rule updates per promotion",sev:"high"},
+  {id:"L05",text:"Cannot auto-switch redemption rates",fix:"Manual backend update at end of launch period",sev:"low"},
+  {id:"L06",text:"No calendar-year expiry on 2nd+ voucher sets",fix:"Annual set creation in Staging each November",sev:"medium"},
+  {id:"L07",text:"Cannot track voucher reclaim count",fix:"AI Voucher Lifecycle Tracker",sev:"low"},
+  {id:"L08",text:"No auto-refill vouchers",fix:"Members claim from Discover tab; nudge campaigns",sev:"medium"},
+  {id:"L09",text:"Cannot auto-issue 3rd/5th/6th stamp rewards",fix:"Discover tab manual claim; clear T&C",sev:"medium"},
+  {id:"L10",text:"Stamp back-door re-triggering",fix:"Time-based restriction (2 months) from AI analyser",sev:"high"},
+  {id:"L11",text:"No mobile video background",fix:"Static fallback; text-free video for desktop",sev:"low"},
+];
+
+// ─── Decision Items ───
+const INIT_DECISIONS = [
+  {id:1,title:"Email OTP request to Eber",status:"open",note:"Remove mobile dependency"},
+  {id:2,title:"Direct Agilysys-Eber POS integration",status:"open",note:"Enable item-level data for promo exclusion"},
+  {id:3,title:"Staff tier brief to Eber",status:"open",note:"Mechanics must be provided before config"},
+  {id:4,title:"Bar applicability for dining vouchers",status:"open",note:"Reconfirm with operations"},
+  {id:5,title:"Points validity confirmation",status:"open",note:"Confirm before launch"},
+  {id:6,title:"Stamp reward usage validity (30 days?)",status:"open",note:"Confirm before Eber config"},
+];
+
+// ─── Checklist Items ───
+const CHECKLISTS = {
+  "Pre-Launch": [
+    "All 5 tiers configured in Eber Staging",
+    "Points earn rates set (launch: $1=10pts)",
+    "Welcome vouchers configured per tier",
+    "Dining voucher sets created for Gold/Platinum/Corporate",
+    "Stamp programme configured for 4 café outlets",
+    "Member portal revamp tested in Staging",
+    "Stripe payment links tested (Gold $40, Platinum $80)",
+    "Sign off from Finance on P&L treatment",
+    "Migrate Staging → Production",
+  ],
+  "Annual Voucher Lifecycle": [
+    "November: Create next year's voucher set in Staging",
+    "December: Test → migrate to Production",
+    "1 January: Verify new set auto-issues",
+    "Ongoing: Monitor manual claims from Discover tab",
+    "31 December: Confirm unused vouchers forfeited",
+  ],
+  "Per-Promotion": [
+    "Update Eber points rules to EXCLUDE promo transactions BEFORE start",
+    "Update Eber stamp rules for café outlets if applicable",
+    "Set Google Calendar reminder to REVERT rules after end",
+    "Verify no overlapping promotions",
+    "Document in Promotion Calendar",
+  ],
+};
+
+// ─── Voucher Lifecycle ───
+const VOUCHER_LIFECYCLE = [
+  {month:"November",action:"Create next year's voucher set in Staging",icon:"📋"},
+  {month:"December",action:"Test → migrate to Production",icon:"🧪"},
+  {month:"1 January",action:"New set auto-issues to active paid members",icon:"🎉"},
+  {month:"Ongoing",action:"Members manually claim refills from Discover tab",icon:"🔄"},
+  {month:"31 December",action:"Unused vouchers forfeited",icon:"⏰"},
+];
+
+// ─── System Prompts ───
+const SYS_STAMP = `You are a loyalty programme analyst for 1-Group Singapore's 1-Insider 3.0 café stamp programme.\nContext:\n- 1 stamp per $10 spent at Wildseed Café outlets (4 locations)\n- 10-stamp card cycle with 2-month loop restart\n- Rewards at stamps 3, 5, 6 (manual claim), 8, 10 (auto-issued)\n- Burn mechanic: stamps deducted on claim\n- BACK-DOOR ISSUE: Eber cannot prevent re-triggering when stamps remain unclaimed\n- WORKAROUND: Time-based claim restriction (e.g., once per 2 months)\nAnalyse café spending patterns and recommend the optimal time restriction. Be concise and data-driven.`;
+
+const SYS_RENEWAL = `You are a premium hospitality communications writer for 1-Group Singapore's 1-Insider programme.\nWrite a membership renewal reminder email. Tone: warm, premium, never desperate.\nInclude: Personal greeting, current tier and benefits they'll lose, usage stats, one-tap renewal link [RENEWAL_LINK], urgency appropriate to timing.\nKeep under 150 words. Premium hospitality tone. Sign off from "The 1-Insider Team".`;
+
+const SYS_CAMPAIGN = `You are a loyalty campaign architect for 1-Group Singapore's 1-Insider 3.0 on Eber.\nContext: 25 venues, 5 tiers, base earn rates Silver 1×/Gold 1.5×/Platinum 2×.\nCRITICAL: Eber cannot auto-exclude promo items — manual backend rule updates required.\nWhen designing: define objective, specify Eber rules to update BEFORE launch, set REVERT DATE, estimate ROI, provide per-promotion checklist.\nAlways flag Eber limitations.`;
+
+const SYS_REWARD = `You are a reward design specialist for 1-Group Singapore's 1-Insider 3.0.\nContext: 25 venues, points redemption base 100pts=$10.\nMargin protection: never flat % discounts; prefer experiences. Cost target 3-8% revenue.\nPresent 3 options: Conservative, Premium, Experience-based. Each with name, points cost, business cost, perceived value ratio, venue feasibility.`;
+
+const SYS_COMPLAINT = `You are a senior member services specialist for 1-Group Singapore's 1-Insider 3.0.\nWhen handling complaints: identify category, check Agilysys→SevenRooms→Eber pipeline, determine if Eber limitation or operational error, propose resolution, draft response script.\nKey: one mobile=one account, birthday=% not voucher, points expire 12mo, stamps=café only.`;
+
+// ─── Styles ───
+const s = {
+  app: { fontFamily: FONT.b, background: C.bg, color: C.text, minHeight: "100vh" },
+  header: { background: C.dark, padding: "0 24px", display: "flex", alignItems: "center", height: 56, gap: 16 },
+  logo: { fontFamily: FONT.h, color: C.gold, fontSize: 18, fontWeight: 700, letterSpacing: 1 },
+  nav: { display: "flex", gap: 2, padding: "0 24px", background: "#fff", borderBottom: "1px solid #eee", overflowX: "auto" },
+  tab: (a) => ({ padding: "12px 16px", fontSize: 12.5, fontWeight: a ? 600 : 400, color: a ? C.gold : C.muted, borderBottom: a ? `2px solid ${C.gold}` : "2px solid transparent", cursor: "pointer", whiteSpace: "nowrap", transition: "all .2s" }),
+  page: { padding: 24, maxWidth: 1200, margin: "0 auto" },
+  card: { background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 8px rgba(0,0,0,.04)", marginBottom: 16 },
+  kpi: { background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 8px rgba(0,0,0,.04)", flex: 1, minWidth: 180 },
+  kpiVal: { fontFamily: FONT.h, fontSize: 28, fontWeight: 700, color: C.text },
+  kpiLabel: { fontSize: 11, color: C.lmuted, textTransform: "uppercase", letterSpacing: 1.2, fontWeight: 600, marginBottom: 4 },
+  badge: (tier) => ({ display: "inline-block", padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: TIER[tier]?.bg || "#eee", color: TIER[tier]?.txt || "#666" }),
+  btn: { background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+  btnSm: { background: C.gold, color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+  btnOutline: { background: "transparent", color: C.gold, border: `1.5px solid ${C.gold}`, borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+  input: { border: "1px solid #ddd", borderRadius: 8, padding: "10px 14px", fontSize: 13, fontFamily: FONT.b, width: "100%", boxSizing: "border-box", outline: "none" },
+  bannerRed: { background: "#FFEBEE", border: "1px solid #EF9A9A", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#B71C1C", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
+  bannerGreen: { background: "#E8F5E9", border: "1px solid #A5D6A7", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#1B5E20", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
+  bannerAmber: { background: "#FFF8E1", border: "1px solid #FFE082", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#5D4037", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
+  h2: { fontFamily: FONT.h, fontSize: 22, fontWeight: 600, marginBottom: 16, color: C.text },
+  h3: { fontFamily: FONT.h, fontSize: 16, fontWeight: 600, marginBottom: 12, color: C.text },
+  mono: { fontFamily: FONT.m, fontSize: 12 },
+  modal: { position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999 },
+  modalInner: { background: "#fff", borderRadius: 16, padding: 28, maxWidth: 600, width: "90%", maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,.2)" },
+  aiPanel: { background: "linear-gradient(135deg,#111,#1a180f)", borderRadius: 12, padding: 24, color: "#fff", marginTop: 16 },
+  aiBadge: { display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 10, fontSize: 9.5, fontWeight: 600, letterSpacing: 1.2, textTransform: "uppercase", background: "rgba(197,162,88,.2)", color: C.gold },
+};
+
+// ─── Shared Comps ───
+const Spinner = () => <div style={{ width: 20, height: 20, border: "2px solid #ddd", borderTopColor: C.gold, borderRadius: "50%", animation: "spin .6s linear infinite" }} />;
+
+const TABS = ["Overview", "Members", "Vouchers", "Stamps", "Tiers", "Promotions", "Decisions", "Renewals", "Staff", "Checklist"];
+
+// ═══════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════
+export default function App() {
+  const [tab, setTab] = useState(0);
+  const [members, setMembers] = useState([]);
+  const [transactions, setTxns] = useState([]);
+  const [rewards, setRewards] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:sys||"You are a loyalty programme architect for 1-Group Singapore's 1-Insider 3.0 on the Eber platform. Be concise, actionable, and data-driven.", messages:[{role:"user",content:prompt}] })
-      });
-      const data=await res.json();
-      const text=data.content?.map(b=>b.text||"").join("\n")||"No response";
-      setAiResult(text); setAiLoading(false); return text;
-    } catch(e){ const err=`Error: ${e.message}`; setAiResult(err); setAiLoading(false); return err; }
-  };
+      const [m, t, r, c] = await Promise.all([
+        supaFetch("members?order=id.asc"),
+        supaFetch("transactions?order=created_at.desc&limit=50"),
+        supaFetch("rewards?order=id.asc"),
+        supaFetch("campaigns?order=id.asc"),
+      ]);
+      if (Array.isArray(m)) setMembers(m);
+      if (Array.isArray(t)) setTxns(t);
+      if (Array.isArray(r)) setRewards(r);
+      if (Array.isArray(c)) setCampaigns(c);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
 
-  const stats = {
-    total:members.length,
-    silver:members.filter(m=>m.tier==='silver').length,
-    gold:members.filter(m=>m.tier==='gold').length,
-    platinum:members.filter(m=>m.tier==='platinum').length,
-    corporate:members.filter(m=>m.tier==='corporate').length,
-    staff:members.filter(m=>m.tier==='staff').length,
-    totalPts:members.reduce((s,m)=>s+m.points,0),
-    totalSpend:members.reduce((s,m)=>s+m.totalSpend,0),
-    avgSpend:members.length?Math.round(members.reduce((s,m)=>s+m.totalSpend,0)/members.length):0,
-    openDecisions:decisions.filter(d=>d.status==='OPEN').length,
-    upcomingPromos:promotions.filter(p=>p.status==='upcoming').length,
-    paidMembers:members.filter(m=>['gold','platinum','corporate'].includes(m.tier)).length,
-    renewalsDue:members.filter(m=>m.membershipExpiry&&new Date(m.membershipExpiry)<new Date(Date.now()+30*864e5)).length,
-  };
-
-  const tierData = TIERS.filter(t=>t.id!=='staff').map(t=>({ name:t.name, value:members.filter(m=>m.tier===t.id).length, color:t.hex }));
-
-  const TABS = [
-    {id:"overview",label:"Overview",icon:"◆"},
-    {id:"members",label:"Members",icon:"♟"},
-    {id:"vouchers",label:"Vouchers",icon:"◈"},
-    {id:"stamps",label:"Stamps",icon:"●"},
-    {id:"tiers",label:"Tiers",icon:"▲"},
-    {id:"promotions",label:"Promos",icon:"◉"},
-    {id:"decisions",label:"Decisions",icon:"⚑"},
-    {id:"renewals",label:"Renewals",icon:"↻"},
-    {id:"staff",label:"Staff",icon:"★"},
-    {id:"checklist",label:"Checklist",icon:"☐"},
-  ];
-
-  if(loading) return (
-    <div style={{...S.app,display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",flexDirection:"column",gap:16}}>
-      <div style={{fontSize:30,color:"#C5A258",fontFamily:font.h,fontWeight:700,letterSpacing:3}}>1-INSIDER</div>
-      <div style={{fontSize:10,color:"#888",letterSpacing:2.5,textTransform:"uppercase"}}>Admin · Eber Platform · 3.0</div>
-      <div style={{width:38,height:38,border:"3px solid #eee",borderTopColor:"#C5A258",borderRadius:"50%",animation:"spin .7s linear infinite"}}/>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-    </div>
-  );
+  useEffect(() => { load(); }, [load]);
 
   return (
-    <div style={S.app}>
-      <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+    <div style={s.app}>
       <style>{`
-        @keyframes spin{to{transform:rotate(360deg)}}
-        @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-        @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
-        .fade{animation:fadeIn .3s ease}
-        .lift:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.08)!important}
-        input:focus,select:focus{border-color:#C5A258!important;box-shadow:0 0 0 3px rgba(197,162,88,.12)}
-        button:hover{opacity:.88}
-        ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#ddd;border-radius:3px}
-        table tr:hover{background:#FDFBF7}
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+        @keyframes spin { to { transform:rotate(360deg) } }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:none } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        ::-webkit-scrollbar { width:6px; height:6px } ::-webkit-scrollbar-thumb { background:#ccc; border-radius:3px }
       `}</style>
-
-      <header style={S.header}>
-        <div style={{display:"flex",alignItems:"center"}}>
-          <span style={S.logo}>1-INSIDER</span>
-          <span style={S.badge}>3.0 · Eber · Admin</span>
+      <div style={s.header}>
+        <div style={s.logo}>✦ 1-INSIDER</div>
+        <div style={{ fontSize: 12, color: "#666" }}>Admin Dashboard</div>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {loading && <Spinner />}
+          <button onClick={load} style={{ ...s.btnSm, background: "transparent", border: "1px solid #444", color: "#aaa", fontSize: 10 }}>↻ Refresh</button>
         </div>
-        <nav style={S.nav}>
-          {TABS.map(t=><button key={t.id} onClick={()=>handleTab(t.id)} style={S.navBtn(tab===t.id)}>
-            <span style={{marginRight:5,fontSize:9,opacity:.7}}>{t.icon}</span>{t.label}
-          </button>)}
-        </nav>
-      </header>
-
-      <main style={S.main} className="fade">
-        {tab==="overview"&&<OverviewTab stats={stats} tierData={tierData} members={members} decisions={decisions} promotions={promotions} setTab={handleTab}/>}
-        {tab==="members"&&<MembersTab members={members} searchQ={searchQ} setSearchQ={setSearchQ} selectedMember={selectedMember} setSelectedMember={setSelectedMember}/>}
-        {tab==="vouchers"&&<VouchersTab vouchers={vouchers} members={members}/>}
-        {tab==="stamps"&&<StampsTab members={members} callAI={callAI} aiLoading={aiLoading} aiResult={aiResult} setAiResult={setAiResult}/>}
-        {tab==="tiers"&&<TiersTab members={members} tierData={tierData}/>}
-        {tab==="promotions"&&<PromotionsTab promotions={promotions} setPromotions={setPromotions}/>}
-        {tab==="decisions"&&<DecisionsTab decisions={decisions} setDecisions={setDecisions}/>}
-        {tab==="renewals"&&<RenewalsTab members={members}/>}
-        {tab==="staff"&&<StaffTab staffReg={staffReg}/>}
-        {tab==="checklist"&&<ChecklistTab decisions={decisions} promotions={promotions}/>}
-      </main>
+      </div>
+      <div style={s.nav}>
+        {TABS.map((t, i) => <div key={i} style={s.tab(tab === i)} onClick={() => setTab(i)}>{t}</div>)}
+      </div>
+      <div style={s.page}>
+        {tab === 0 && <Overview members={members} transactions={transactions} campaigns={campaigns} />}
+        {tab === 1 && <Members members={members} transactions={transactions} reload={load} />}
+        {tab === 2 && <Vouchers />}
+        {tab === 3 && <StampsTab />}
+        {tab === 4 && <TiersTab members={members} />}
+        {tab === 5 && <Promotions campaigns={campaigns} reload={load} />}
+        {tab === 6 && <Decisions />}
+        {tab === 7 && <Renewals members={members} />}
+        {tab === 8 && <StaffTab members={members} />}
+        {tab === 9 && <ChecklistTab />}
+      </div>
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: OVERVIEW
-// ═══════════════════════════════════════════════════════════════════════════════
-function OverviewTab({stats,tierData,members,decisions,promotions,setTab}){
-  const monthlyData=["Jan","Feb","Mar","Apr","May","Jun"].map(m=>({month:m,signups:Math.floor(Math.random()*60+20),revenue:Math.floor(Math.random()*120000+30000)}));
-  return <div className="fade">
-    <div style={{marginBottom:28}}>
-      <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:0}}>Programme Overview</h1>
-      <p style={{color:"#888",margin:"4px 0 0",fontSize:12}}>1-Insider 3.0 · Eber Platform · {fmtNum(stats.total)} members across {VENUES.length} venues</p>
-    </div>
+// ═══════════════════════════════════════════════
+// TAB 1: OVERVIEW
+// ═══════════════════════════════════════════════
+function Overview({ members, transactions, campaigns }) {
+  const totalPts = members.reduce((a, m) => a + (m.points || 0), 0);
+  const totalSpend = members.reduce((a, m) => a + parseFloat(m.total_spend || 0), 0);
+  const activeCamp = campaigns.filter(c => c.status === "active").length;
+  const redeemTxns = transactions.filter(t => t.type === "redeem");
+  const tierCounts = ["silver", "gold", "platinum", "corporate", "staff"].map(t => ({
+    name: t.charAt(0).toUpperCase() + t.slice(1), value: members.filter(m => m.tier === t).length, fill: TIER[t]?.hex
+  }));
 
-    {stats.openDecisions>0&&<div style={S.warn}>⚠️ <div><strong>{stats.openDecisions} open decision{stats.openDecisions>1?'s':''}</strong> requiring resolution before full programme launch. <button style={{...S.btn("ghost"),padding:"3px 10px",fontSize:10,marginLeft:8}} onClick={()=>setTab("decisions")}>View Decisions →</button></div></div>}
-
-    <div style={S.grid(5)}>
-      {[
-        {l:"Total Members",v:fmtNum(stats.total),d:`${stats.paidMembers} paid tier`,c:null},
-        {l:"Active Points",v:fmtNum(stats.totalPts),d:fmtCur(stats.totalPts*.03)+" liability",c:null},
-        {l:"Total Revenue",v:fmtCur(stats.totalSpend),d:"+18% YoY",c:"#4CAF50"},
-        {l:"Renewals Due (30d)",v:stats.renewalsDue,d:"Manual flow required",c:stats.renewalsDue>0?"#FF9800":null},
-        {l:"Upcoming Promos",v:stats.upcomingPromos,d:"Check exclusion rules",c:stats.upcomingPromos>0?"#2196F3":null},
-      ].map((k,i)=><div key={i} style={S.stat} className="lift">
-        <div style={S.statL}>{k.l}</div>
-        <div style={S.statV}>{k.v}</div>
-        <div style={{fontSize:11,color:k.c||"#888",marginTop:4}}>{k.d}</div>
-      </div>)}
-    </div>
-
-    <div style={{...S.grid(3),marginTop:18}}>
-      <div style={S.card}>
-        <div style={S.cardT}>Tier Distribution</div>
-        <ResponsiveContainer width="100%" height={200}>
-          <PieChart><Pie data={tierData} cx="50%" cy="50%" outerRadius={75} innerRadius={45} dataKey="value" stroke="none" paddingAngle={3}>{tierData.map((e,i)=><Cell key={i} fill={e.color}/>)}</Pie><Tooltip formatter={v=>`${v} members`}/></PieChart>
-        </ResponsiveContainer>
-        <div style={{display:"flex",justifyContent:"center",gap:14,marginTop:8,flexWrap:"wrap"}}>
-          {tierData.map((t,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#666"}}><div style={{width:10,height:10,borderRadius:3,background:t.color}}/>{t.name} ({t.value})</div>)}
-        </div>
-      </div>
-
-      <div style={S.card}>
-        <div style={S.cardT}>Monthly Signups</div>
-        <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={monthlyData}>
-            <defs><linearGradient id="gGold" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#C5A258" stopOpacity={.3}/><stop offset="100%" stopColor="#C5A258" stopOpacity={0}/></linearGradient></defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
-            <XAxis dataKey="month" tick={{fontSize:10}} stroke="#ccc"/>
-            <YAxis tick={{fontSize:10}} stroke="#ccc"/>
-            <Tooltip/>
-            <Area type="monotone" dataKey="signups" stroke="#C5A258" fill="url(#gGold)" strokeWidth={2}/>
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div style={S.card}>
-        <div style={S.cardT}>Eber Platform Status</div>
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <h2 style={s.h2}>Platform Overview</h2>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
         {[
-          {n:"Eber Portal",s:"Live",ok:true},
-          {n:"Stripe (JEPL)",s:"Connected",ok:true},
-          {n:"SevenRooms CRM",s:"Synced",ok:true},
-          {n:"Agilysys POS",s:"All venues online",ok:true},
-          {n:"Staging Env",s:"Available",ok:true},
-        ].map((x,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:i<4?"1px solid #f5f5f5":"none"}}>
-          <span style={{fontSize:12}}>{x.n}</span>
-          <span style={{...S.tag(x.ok?"#E8F5E9":"#FFEBEE",x.ok?"#2E7D32":"#C62828"),fontSize:10}}>● {x.s}</span>
-        </div>)}
-        <div style={{marginTop:14,padding:12,background:"#F5F0E8",borderRadius:8,fontSize:11,color:"#5D4037",lineHeight:1.5}}>
-          <strong>Browser-first advantage:</strong> No app download required. Members access 1-Insider via any browser — zero friction onboarding.
-        </div>
+          { label: "Total Members", val: members.length, accent: C.gold },
+          { label: "Active Campaigns", val: activeCamp, accent: "#2196F3" },
+          { label: "Points in Circulation", val: totalPts.toLocaleString(), accent: "#4CAF50" },
+          { label: "Total Spend (SGD)", val: `$${totalSpend.toLocaleString()}`, accent: "#B85C38" },
+          { label: "Redemptions", val: redeemTxns.length, accent: "#6B4E8B" },
+        ].map((k, i) => (
+          <div key={i} style={s.kpi}>
+            <div style={s.kpiLabel}>{k.label}</div>
+            <div style={{ ...s.kpiVal, color: k.accent }}>{k.val}</div>
+          </div>
+        ))}
       </div>
-    </div>
 
-    <div style={{...S.grid(2),marginTop:4}}>
-      <div style={S.card}>
-        <div style={S.cardT}>Revenue by Month</div>
-        <ResponsiveContainer width="100%" height={180}>
-          <BarChart data={monthlyData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
-            <XAxis dataKey="month" tick={{fontSize:10}} stroke="#ccc"/>
-            <YAxis tick={{fontSize:10}} stroke="#ccc" tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/>
-            <Tooltip formatter={v=>fmtCur(v)}/>
-            <Bar dataKey="revenue" fill="#C5A258" radius={[4,4,0,0]}/>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <div style={S.card}>
-        <div style={S.cardT}>Quick Actions</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          {[
-            {label:"Members",icon:"♟",tab:"members"},
-            {label:"Vouchers",icon:"◈",tab:"vouchers"},
-            {label:"Promotions",icon:"◉",tab:"promotions"},
-            {label:"Renewals",icon:"↻",tab:"renewals"},
-            {label:"Decisions",icon:"⚑",tab:"decisions"},
-            {label:"Checklist",icon:"☐",tab:"checklist"},
-          ].map(q=><button key={q.tab} onClick={()=>setTab(q.tab)} style={{...S.btn("ghost"),padding:"14px 16px",display:"flex",alignItems:"center",gap:8,justifyContent:"flex-start",borderRadius:10}}>
-            <span style={{fontSize:16,opacity:.6}}>{q.icon}</span><span>{q.label}</span>
-          </button>)}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+        <div style={s.card}>
+          <h3 style={s.h3}>Tier Distribution</h3>
+          <ResponsiveContainer width="100%" height={220}>
+            <PieChart>
+              <Pie data={tierCounts} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                {tierCounts.map((e, i) => <Cell key={i} fill={e.fill} />)}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+            {tierCounts.map((t, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: t.fill }} />
+                {t.name}: {t.value}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={s.card}>
+          <h3 style={s.h3}>Recent Transactions</h3>
+          <div style={{ maxHeight: 250, overflow: "auto" }}>
+            {transactions.slice(0, 10).map((t, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f0f0f0", fontSize: 12 }}>
+                <div>
+                  <span style={s.mono}>{t.member_id}</span>
+                  <span style={{ color: C.muted, marginLeft: 8 }}>{t.venue || t.reward_name}</span>
+                </div>
+                <div style={{ fontWeight: 600, color: t.points > 0 ? "#4CAF50" : "#D32F2F" }}>
+                  {t.points > 0 ? "+" : ""}{t.points} pts
+                </div>
+              </div>
+            ))}
+            {transactions.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No transactions yet</div>}
+          </div>
         </div>
       </div>
+
+      <h3 style={s.h3}>Eber Platform Status</h3>
+      {LIMITATIONS.filter(l => l.sev === "high").map((l, i) => (
+        <div key={i} style={s.bannerRed}>
+          <span>🚫</span>
+          <div><strong>{l.id}:</strong> {l.text}<br /><span style={{ color: "#666", fontSize: 11 }}>Workaround: {l.fix}</span></div>
+        </div>
+      ))}
+      <div style={s.bannerGreen}>
+        <span>✅</span>
+        <div><strong>Active Workarounds:</strong> Gmail MCP renewal reminders, AI Voucher Lifecycle Tracker, Time-based stamp restriction, Per-promotion rule checklists</div>
+      </div>
     </div>
-  </div>;
+  );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: MEMBERS
-// ═══════════════════════════════════════════════════════════════════════════════
-function MembersTab({members,searchQ,setSearchQ,selectedMember,setSelectedMember}){
-  const [filterTier,setFilterTier]=useState("all");
-  const filtered=members.filter(m=>(filterTier==="all"||m.tier===filterTier)&&(!searchQ||m.name.toLowerCase().includes(searchQ.toLowerCase())||m.mobile.includes(searchQ)||m.id.toLowerCase().includes(searchQ.toLowerCase())));
-  return <div className="fade">
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
-      <div>
-        <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:0}}>Members</h1>
-        <p style={{color:"#888",margin:"4px 0 0",fontSize:12}}>{fmtNum(members.length)} total · 1 mobile = 1 account (Eber restriction)</p>
+// ═══════════════════════════════════════════════
+// TAB 2: MEMBERS
+// ═══════════════════════════════════════════════
+function Members({ members, transactions, reload }) {
+  const [search, setSearch] = useState("");
+  const [tierFilter, setTierFilter] = useState("all");
+  const [selected, setSelected] = useState(null);
+
+  const filtered = members.filter(m => {
+    const matchSearch = !search || m.name?.toLowerCase().includes(search.toLowerCase()) || m.id?.toLowerCase().includes(search.toLowerCase()) || m.mobile?.includes(search);
+    const matchTier = tierFilter === "all" || m.tier === tierFilter;
+    return matchSearch && matchTier;
+  });
+
+  const memberTxns = selected ? transactions.filter(t => t.member_id === selected.id) : [];
+
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={s.h2}>Members ({members.length})</h2>
+        <button onClick={reload} style={s.btnSm}>↻ Refresh</button>
       </div>
-      <div style={{display:"flex",gap:10}}>
-        <input style={{...S.input,width:240}} placeholder="Search name, mobile, ID…" value={searchQ} onChange={e=>setSearchQ(e.target.value)}/>
-        <select style={S.select} value={filterTier} onChange={e=>setFilterTier(e.target.value)}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+        <input style={{ ...s.input, maxWidth: 300 }} placeholder="Search name, ID, mobile…" value={search} onChange={e => setSearch(e.target.value)} />
+        <select style={{ ...s.input, maxWidth: 150 }} value={tierFilter} onChange={e => setTierFilter(e.target.value)}>
           <option value="all">All Tiers</option>
-          {TIERS.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+          {["silver","gold","platinum","corporate","staff"].map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase()+t.slice(1)}</option>)}
         </select>
       </div>
-    </div>
-
-    <div style={S.card}>
-      <table style={S.table}><thead><tr>
-        <th style={S.th}>Member</th><th style={S.th}>Mobile</th><th style={S.th}>Tier</th><th style={S.th}>Points</th><th style={S.th}>Spend</th><th style={S.th}>Stamps</th><th style={S.th}>Visits</th><th style={S.th}>Expiry</th><th style={S.th}></th>
-      </tr></thead><tbody>
-        {filtered.map(m=><tr key={m.id} style={{cursor:"pointer"}} onClick={()=>setSelectedMember(m)}>
-          <td style={S.td}><div style={{fontWeight:500}}>{m.name}</div><div style={{fontSize:10,color:"#999"}}>{m.id}</div></td>
-          <td style={{...S.td,fontSize:11,fontFamily:font.m}}>{m.mobile}</td>
-          <td style={S.td}><span style={S.tier(m.tier)}><span style={S.dot(m.tier)}/>{m.tier}</span></td>
-          <td style={{...S.td,fontWeight:600,color:"#C5A258"}}>{fmtNum(m.points)}</td>
-          <td style={S.td}>{fmtCur(m.totalSpend)}</td>
-          <td style={{...S.td,textAlign:"center"}}>{m.stamps>0?m.stamps:"—"}</td>
-          <td style={{...S.td,textAlign:"center"}}>{m.visits}</td>
-          <td style={{...S.td,fontSize:11,color:m.membershipExpiry?"#888":"#ccc"}}>{m.membershipExpiry?fmtDate(m.membershipExpiry):"Free"}</td>
-          <td style={S.td}><button style={{...S.btn("ghost"),padding:"4px 10px",fontSize:10}}>View</button></td>
-        </tr>)}
-      </tbody></table>
-      {filtered.length===0&&<div style={{textAlign:"center",padding:40,color:"#999",fontSize:13}}>No members found</div>}
-    </div>
-
-    {selectedMember&&<div style={S.modal} onClick={()=>setSelectedMember(null)}>
-      <div style={S.modalC} onClick={e=>e.stopPropagation()}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-          <div>
-            <h2 style={{fontFamily:font.h,fontSize:24,margin:0}}>{selectedMember.name}</h2>
-            <p style={{color:"#888",margin:"4px 0",fontSize:12}}>{selectedMember.id} · {selectedMember.mobile} · {selectedMember.email}</p>
-          </div>
-          <span style={S.tier(selectedMember.tier)}><span style={S.dot(selectedMember.tier)}/>{selectedMember.tier}</span>
-        </div>
-        <div style={{...S.grid(3),marginTop:18}}>
-          {[
-            {l:"Points",v:fmtNum(selectedMember.points),c:"#C5A258"},
-            {l:"Total Spend",v:fmtCur(selectedMember.totalSpend),c:"#1A1A1A"},
-            {l:"Visits",v:selectedMember.visits,c:"#1A1A1A"},
-          ].map((x,i)=><div key={i} style={{background:"#FAF8F5",borderRadius:10,padding:16,textAlign:"center"}}>
-            <div style={S.statL}>{x.l}</div>
-            <div style={{fontSize:26,fontWeight:700,color:x.c,fontFamily:font.h}}>{x.v}</div>
-          </div>)}
-        </div>
-        <div style={{...S.grid(2),marginTop:14,fontSize:12}}>
-          <div><span style={{...S.statL,display:"block",marginBottom:4}}>Category Pref</span>{CATEGORIES.find(c=>c.id===selectedMember.categoryPref)?.icon} {CATEGORIES.find(c=>c.id===selectedMember.categoryPref)?.name}</div>
-          <div><span style={{...S.statL,display:"block",marginBottom:4}}>Favourite Venue</span>{VENUES.find(v=>v.id===selectedMember.favouriteVenue)?.name}</div>
-          <div><span style={{...S.statL,display:"block",marginBottom:4}}>Birthday Month</span>{new Date(2026,selectedMember.birthdayMonth-1).toLocaleString('en',{month:'long'})}</div>
-          <div><span style={{...S.statL,display:"block",marginBottom:4}}>Café Stamps</span>{selectedMember.stamps} stamp{selectedMember.stamps!==1?'s':''}</div>
-          {selectedMember.membershipExpiry&&<div><span style={{...S.statL,display:"block",marginBottom:4}}>Membership Expiry</span>{fmtDate(selectedMember.membershipExpiry)}</div>}
-          <div><span style={{...S.statL,display:"block",marginBottom:4}}>Voucher Sets Used</span>{selectedMember.voucherSetsUsed}</div>
-        </div>
-        <div style={{marginTop:18,display:"flex",gap:8}}>
-          <button style={S.btn("primary")}>Adjust Points</button>
-          <button style={S.btn("gold")}>Send Voucher</button>
-          <button style={S.btn("ghost")}>View Activity</button>
-        </div>
-        <div style={{marginTop:16,textAlign:"right"}}><button style={S.btn("ghost")} onClick={()=>setSelectedMember(null)}>Close</button></div>
+      <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ background: "#fafafa", textAlign: "left" }}>
+              {["ID","Name","Mobile","Tier","Points","Spend","Visits","Stamps",""].map((h,i) => (
+                <th key={i} style={{ padding: "10px 12px", fontWeight: 600, color: C.lmuted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 1, borderBottom: "1px solid #eee" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(m => (
+              <tr key={m.id} style={{ borderBottom: "1px solid #f5f5f5", cursor: "pointer" }} onClick={() => setSelected(m)}>
+                <td style={{ padding: "10px 12px", ...s.mono }}>{m.id}</td>
+                <td style={{ padding: "10px 12px", fontWeight: 500 }}>{m.name}</td>
+                <td style={{ padding: "10px 12px", ...s.mono, color: C.muted }}>{m.mobile}</td>
+                <td style={{ padding: "10px 12px" }}><span style={s.badge(m.tier)}>{m.tier}</span></td>
+                <td style={{ padding: "10px 12px", fontWeight: 600 }}>{(m.points||0).toLocaleString()}</td>
+                <td style={{ padding: "10px 12px" }}>${parseFloat(m.total_spend||0).toLocaleString()}</td>
+                <td style={{ padding: "10px 12px" }}>{m.visits||0}</td>
+                <td style={{ padding: "10px 12px" }}>{m.stamps||0}/10</td>
+                <td style={{ padding: "10px 12px" }}><span style={{ color: C.gold, fontSize: 11 }}>View →</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filtered.length === 0 && <div style={{ padding: 20, color: C.muted, textAlign: "center" }}>No members found</div>}
       </div>
-    </div>}
-  </div>;
-}
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: VOUCHERS
-// ═══════════════════════════════════════════════════════════════════════════════
-function VouchersTab({vouchers,members}){
-  return <div className="fade">
-    <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:"0 0 4px"}}>Vouchers & Gift Cards</h1>
-    <p style={{color:"#888",margin:"0 0 22px",fontSize:12}}>Eber voucher lifecycle management</p>
-
-    <div style={S.limit}>🚫 <div><strong>Eber Limitation:</strong> Calendar-year expiry only works for the 1st auto-issued voucher set. Subsequent sets require manual claim from Discover tab. Auto-refill is not tracked.</div></div>
-    <div style={S.ok}>✅ <div><strong>AI Workaround Active:</strong> Voucher Lifecycle Tracker monitors claim frequency. Gmail MCP nudges sent when a set is fully used. Annual creation reminders set in Google Calendar.</div></div>
-
-    <div style={S.card}>
-      <div style={S.cardT}>Voucher Configuration</div>
-      <table style={S.table}><thead><tr>
-        <th style={S.th}>Voucher</th><th style={S.th}>Type</th><th style={S.th}>Tiers</th><th style={S.th}>Value</th><th style={S.th}>Trigger</th><th style={S.th}>Validity</th><th style={S.th}>Stackable</th><th style={S.th}>Status</th>
-      </tr></thead><tbody>
-        {vouchers.map(v=><tr key={v.id}>
-          <td style={{...S.td,fontWeight:500}}>{v.name}</td>
-          <td style={S.td}><span style={S.tag("#EDE7F6","#4527A0")}>{v.type}</span></td>
-          <td style={S.td}><div style={{display:"flex",gap:3,flexWrap:"wrap"}}>{v.tiers.map(t=><span key={t} style={S.tier(t)}>{t}</span>)}</div></td>
-          <td style={{...S.td,fontWeight:600}}>{fmtCur(v.value)}</td>
-          <td style={{...S.td,fontSize:11}}>{v.trigger}</td>
-          <td style={{...S.td,fontSize:11}}>{v.validity}</td>
-          <td style={S.td}>{v.stackable?"Yes":"No"}</td>
-          <td style={S.td}><span style={S.tag(v.status==='active'?"#E8F5E9":"#F5F5F5",v.status==='active'?"#2E7D32":"#666")}>{v.status}</span></td>
-        </tr>)}
-      </tbody></table>
-    </div>
-
-    <div style={S.grid(2)}>
-      <div style={S.card}>
-        <div style={S.cardT}>Eber Voucher Rules</div>
-        {[
-          {r:"1 redemption per check (dining + points voucher)",ok:true},
-          {r:"Not stackable with other promotions",ok:true},
-          {r:"Silver tier NOT entitled to unlimited dining vouchers",ok:true},
-          {r:"Unused vouchers forfeited when new year's set claimed",ok:true},
-          {r:"Voucher redemption = revenue (ENT-voucher in P&L)",ok:true},
-          {r:"Bar applicability — PENDING confirmation from Brendon",ok:false},
-        ].map((x,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:i<5?"1px solid #f5f5f5":"none",fontSize:12}}>
-          <span style={{color:x.ok?"#4CAF50":"#FF9800",fontSize:14}}>{x.ok?"✓":"⚠"}</span>{x.r}
-        </div>)}
-      </div>
-      <div style={S.card}>
-        <div style={S.cardT}>Annual Voucher Set Lifecycle</div>
-        <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {[
-            {step:"November",desc:"Create next year's voucher set in Staging",icon:"📋"},
-            {step:"December",desc:"Test → migrate to Production",icon:"🧪"},
-            {step:"1 January",desc:"New set auto-issues to active paid members",icon:"🎉"},
-            {step:"Ongoing",desc:"Members manually claim refills from Discover tab",icon:"🔄"},
-            {step:"31 December",desc:"Unused vouchers from current year forfeited",icon:"⏰"},
-          ].map((x,i)=><div key={i} style={{display:"flex",gap:12,alignItems:"flex-start",padding:12,background:"#FAF8F5",borderRadius:8}}>
-            <span style={{fontSize:20}}>{x.icon}</span>
-            <div><div style={{fontWeight:600,fontSize:12}}>{x.step}</div><div style={{fontSize:11,color:"#666"}}>{x.desc}</div></div>
-          </div>)}
-        </div>
-      </div>
-    </div>
-  </div>;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: STAMPS
-// ═══════════════════════════════════════════════════════════════════════════════
-function StampsTab({members,callAI,aiLoading,aiResult,setAiResult}){
-  const cafeMembers = members.filter(m=>m.stamps>0);
-  const stampDist = [1,2,3,4,5,6,7,8,9,10].map(s=>({stamp:`${s}`,count:cafeMembers.filter(m=>m.stamps>=s).length}));
-
-  return <div className="fade">
-    <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:"0 0 4px"}}>Café Stamp Programme</h1>
-    <p style={{color:"#888",margin:"0 0 22px",fontSize:12}}>1 stamp per $10 spent · Café outlets only</p>
-
-    <div style={S.limit}>🚫 <div><strong>Eber Limitation — "Back-door" Issue:</strong> Rewards at 3rd, 5th, 6th stamps require manual member claim. Eber cannot prevent re-triggering when stamps remain unclaimed. Multi-transaction splits ($30 across 2 txns) trigger rewards twice.</div></div>
-    <div style={S.ok}>✅ <div><strong>AI Workaround:</strong> Time-based restriction (e.g. once per 2 months) recommended. Use AI Stamp Card Analyser below to calibrate optimal window from café spend data.</div></div>
-
-    <div style={S.grid(2)}>
-      <div style={S.card}>
-        <div style={S.cardT}>Stamp Thresholds</div>
-        <table style={S.table}><thead><tr><th style={S.th}>Stamp</th><th style={S.th}>Issuance</th><th style={S.th}>Notes</th></tr></thead><tbody>
-          {STAMP_THRESHOLDS.map(t=><tr key={t.stamp}>
-            <td style={{...S.td,fontWeight:700,fontSize:20,fontFamily:font.h,color:"#C5A258"}}>{t.stamp}</td>
-            <td style={S.td}><span style={S.tag(t.autoIssue?"#E8F5E9":"#FFF8E1",t.autoIssue?"#2E7D32":"#5D4037")}>{t.autoIssue?"Auto":"Manual"}</span></td>
-            <td style={{...S.td,fontSize:11,color:"#666"}}>{t.label}</td>
-          </tr>)}
-        </tbody></table>
-      </div>
-      <div style={S.card}>
-        <div style={S.cardT}>Participating Outlets</div>
-        {CAFE_OUTLETS.map(v=><div key={v.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:"1px solid #f5f5f5"}}>
-          <div style={{width:9,height:9,borderRadius:"50%",background:"#7B9E6B"}}/>
-          <div><div style={{fontWeight:500,fontSize:12}}>{v.name}</div><div style={{fontSize:10,color:"#888"}}>{v.loc}</div></div>
-        </div>)}
-      </div>
-    </div>
-
-    <div style={S.card}>
-      <div style={S.cardT}>Stamp Distribution</div>
-      <ResponsiveContainer width="100%" height={180}>
-        <BarChart data={stampDist}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
-          <XAxis dataKey="stamp" tick={{fontSize:10}} stroke="#ccc"/>
-          <YAxis tick={{fontSize:10}} stroke="#ccc"/>
-          <Tooltip/>
-          <Bar dataKey="count" fill="#7B9E6B" radius={[4,4,0,0]}/>
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-
-    <div style={{...S.ai,marginTop:6}}>
-      <div style={S.aiL}>✦ AI Stamp Card Analyser</div>
-      <p style={{fontSize:12,color:"#bbb",margin:"0 0 14px",maxWidth:580}}>Analyse café spending patterns to determine the optimal time-based restriction window for the back-door issue workaround.</p>
-      <button style={S.btn("gold")} onClick={()=>callAI("Analyse typical café stamp card cycle for 1-Group's Wildseed Café outlets. Assumptions: average café visit spend $18-25, average visits 2-3 per month per regular. Calculate: 1) Average days to complete a 10-stamp card, 2) Recommended time restriction window to prevent back-door re-triggering, 3) What % of members would be affected by a 2-month vs 3-month restriction. Present as a concise analysis with a clear recommendation.")} disabled={aiLoading}>
-        {aiLoading?"✦ Analysing…":"✦ Run Analysis"}
-      </button>
-      {aiResult&&!aiLoading&&<div style={{marginTop:16,background:"rgba(255,255,255,.06)",borderRadius:10,padding:16,maxHeight:260,overflowY:"auto"}}>
-        <pre style={{fontSize:11,fontFamily:font.m,color:"#ddd",whiteSpace:"pre-wrap",margin:0,lineHeight:1.6}}>{aiResult}</pre>
-        <button style={{...S.btn("ghost"),color:"#777",marginTop:10,fontSize:10}} onClick={()=>setAiResult(null)}>Clear</button>
-      </div>}
-    </div>
-  </div>;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: TIERS
-// ═══════════════════════════════════════════════════════════════════════════════
-function TiersTab({members,tierData}){
-  return <div className="fade">
-    <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:"0 0 4px"}}>Tier Configuration</h1>
-    <p style={{color:"#888",margin:"0 0 22px",fontSize:12}}>Silver (free) · Gold, Platinum, Corporate (paid via Stripe) · Staff (internal)</p>
-
-    <div style={S.warn}>⚠️ <div><strong>Eber Limitation:</strong> No automated renewal. No tier benefits on purchase page. No native cross-tier upgrade gating. Workarounds active for all three.</div></div>
-
-    <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:14}}>
-      {TIERS.map(t=>{
-        const count=members.filter(m=>m.tier===t.id).length;
-        return <div key={t.id} style={{...S.card,borderTop:`4px solid ${t.hex}`,padding:20}} className="lift">
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
-            <div style={{width:40,height:40,borderRadius:10,background:t.id==='platinum'?t.bg:`${t.hex}22`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-              <div style={{width:16,height:16,borderRadius:"50%",background:t.hex}}/>
+      {selected && (
+        <div style={s.modal} onClick={() => setSelected(null)}>
+          <div style={s.modalInner} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <div>
+                <div style={{ fontFamily: FONT.h, fontSize: 20, fontWeight: 600 }}>{selected.name}</div>
+                <div style={{ ...s.mono, color: C.muted, marginTop: 2 }}>{selected.id} · {selected.mobile}</div>
+              </div>
+              <span style={s.badge(selected.tier)}>{selected.tier}</span>
             </div>
-            <div>
-              <div style={{fontWeight:700,fontSize:17,fontFamily:font.h}}>{t.name}</div>
-              <div style={{fontSize:10,color:"#888"}}>{t.desc}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
+              {[
+                { l: "Points", v: (selected.points||0).toLocaleString() },
+                { l: "Total Spend", v: `$${parseFloat(selected.total_spend||0).toLocaleString()}` },
+                { l: "Visits", v: selected.visits||0 },
+                { l: "Stamps", v: `${selected.stamps||0}/10` },
+              ].map((k,i) => (
+                <div key={i} style={{ background: C.bg, borderRadius: 8, padding: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: C.lmuted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>{k.l}</div>
+                  <div style={{ fontFamily: FONT.h, fontSize: 18, fontWeight: 600 }}>{k.v}</div>
+                </div>
+              ))}
             </div>
-          </div>
-          <div style={{display:"flex",gap:10,marginBottom:14}}>
-            <div style={{flex:1,background:"#fafafa",borderRadius:8,padding:10,textAlign:"center"}}>
-              <div style={{fontSize:9,color:"#999",textTransform:"uppercase",letterSpacing:1}}>Members</div>
-              <div style={{fontSize:22,fontWeight:700,fontFamily:font.h}}>{count}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>Email: {selected.email || "—"} · Birthday: Month {selected.birthday_month || "—"} · Favourite: {selected.favourite_venue || "—"}</div>
+            <h3 style={{ ...s.h3, marginTop: 16 }}>Transaction History</h3>
+            <div style={{ maxHeight: 200, overflow: "auto" }}>
+              {memberTxns.map((t, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #f0f0f0", fontSize: 12 }}>
+                  <div>{t.type === "redeem" ? `Redeemed: ${t.reward_name}` : t.venue} <span style={{ color: "#aaa" }}>· {new Date(t.created_at).toLocaleDateString()}</span></div>
+                  <div style={{ fontWeight: 600, color: t.points > 0 ? "#4CAF50" : "#D32F2F" }}>{t.points > 0 ? "+" : ""}{t.points}</div>
+                </div>
+              ))}
+              {memberTxns.length === 0 && <div style={{ color: C.muted }}>No transactions</div>}
             </div>
-            <div style={{flex:1,background:"#fafafa",borderRadius:8,padding:10,textAlign:"center"}}>
-              <div style={{fontSize:9,color:"#999",textTransform:"uppercase",letterSpacing:1}}>Earn Rate</div>
-              <div style={{fontSize:22,fontWeight:700,fontFamily:font.h,color:"#C5A258"}}>{t.earn}×</div>
-            </div>
+            <button style={{ ...s.btn, marginTop: 16, width: "100%" }} onClick={() => setSelected(null)}>Close</button>
           </div>
-          <div style={{fontSize:10,color:"#888",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Benefits</div>
-          {t.benefits.map((b,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:7,fontSize:11,color:"#444",marginBottom:5}}>
-            <div style={{width:5,height:5,borderRadius:"50%",background:t.hex,flexShrink:0}}/>{b}
-          </div>)}
-          {t.paid&&<div style={{marginTop:12,padding:8,background:"#FFF8E1",borderRadius:6,fontSize:10,color:"#5D4037",textAlign:"center"}}>💳 Paid via Stripe · Manual renewal</div>}
-        </div>;
-      })}
-    </div>
-  </div>;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: PROMOTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
-function PromotionsTab({promotions,setPromotions}){
-  return <div className="fade">
-    <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:"0 0 4px"}}>Promotion Calendar</h1>
-    <p style={{color:"#888",margin:"0 0 22px",fontSize:12}}>Track promotions and Eber points/stamp rule exclusions</p>
-
-    <div style={S.limit}>🚫 <div><strong>Eber Limitation:</strong> Promotional transactions are NOT automatically excluded from points accrual. Points and stamp rules must be manually updated in Eber backend BEFORE each promotion starts, and REVERTED after it ends.</div></div>
-
-    <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <div style={S.cardT}>Promotions</div>
-        <button style={S.btn("primary")}>+ Add Promotion</button>
-      </div>
-      <table style={S.table}><thead><tr>
-        <th style={S.th}>Promotion</th><th style={S.th}>Period</th><th style={S.th}>Outlets</th><th style={S.th}>Type</th><th style={S.th}>Exclusion</th><th style={S.th}>Revert Date</th><th style={S.th}>Status</th>
-      </tr></thead><tbody>
-        {promotions.map(p=><tr key={p.id}>
-          <td style={{...S.td,fontWeight:500}}>{p.name}</td>
-          <td style={{...S.td,fontSize:11}}>{fmtDate(p.start)} – {fmtDate(p.end)}</td>
-          <td style={{...S.td,fontSize:11}}>{p.outlets[0]==='all'?'All venues':p.outlets.length+' outlets'}</td>
-          <td style={S.td}><span style={S.tag("#EDE7F6","#4527A0")}>{p.type.replace(/_/g,' ')}</span></td>
-          <td style={S.td}>{p.exclusionApplied?<span style={S.tag("#E8F5E9","#2E7D32")}>✓ Applied</span>:<span style={S.tag("#FFEBEE","#C62828")}>✗ Missing</span>}</td>
-          <td style={{...S.td,fontSize:11,fontFamily:font.m}}>{fmtDate(p.revertDate)}</td>
-          <td style={S.td}><span style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}><span style={S.sDot(p.status)}/>{p.status}</span></td>
-        </tr>)}
-      </tbody></table>
-    </div>
-
-    <div style={S.card}>
-      <div style={S.cardT}>Per-Promotion Checklist</div>
-      {[
-        "Update Eber points rules to exclude promotional transactions BEFORE promotion starts",
-        "Update Eber stamp rules to exclude at café outlets if applicable",
-        "Set Google Calendar reminder to REVERT rules after promotion ends",
-        "Verify no overlapping promotions with conflicting rules",
-        "Document promotion in the Promotion Calendar",
-      ].map((c,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:i<4?"1px solid #f5f5f5":"none",fontSize:12}}>
-        <span style={{width:18,height:18,border:"2px solid #ddd",borderRadius:4,flexShrink:0}}/>
-        {c}
-      </div>)}
-    </div>
-  </div>;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: DECISIONS
-// ═══════════════════════════════════════════════════════════════════════════════
-function DecisionsTab({decisions,setDecisions}){
-  const resolve = (id) => {
-    const updated = decisions.map(d=>d.id===id?{...d,status:"CLOSED",notes:d.notes+" [Resolved]"}:d);
-    setDecisions(updated);
-    store.set("eber-decisions",updated);
-  };
-  return <div className="fade">
-    <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:"0 0 4px"}}>Decision Log</h1>
-    <p style={{color:"#888",margin:"0 0 22px",fontSize:12}}>Track open decisions that must be resolved before full programme launch</p>
-
-    <div style={{...S.grid(2)}}>
-      <div style={{...S.stat,textAlign:"center"}} className="lift">
-        <div style={S.statL}>Open</div>
-        <div style={{...S.statV,color:"#FF9800"}}>{decisions.filter(d=>d.status==='OPEN').length}</div>
-      </div>
-      <div style={{...S.stat,textAlign:"center"}} className="lift">
-        <div style={S.statL}>Closed</div>
-        <div style={{...S.statV,color:"#4CAF50"}}>{decisions.filter(d=>d.status==='CLOSED').length}</div>
-      </div>
-    </div>
-
-    <div style={{marginTop:18}}>
-      {decisions.map(d=><div key={d.id} style={{...S.card,borderLeft:`4px solid ${d.status==='OPEN'?"#FF9800":"#4CAF50"}`}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-          <div>
-            <div style={{fontWeight:600,fontSize:15}}>{d.decision}</div>
-            <div style={{fontSize:11,color:"#888",marginTop:4}}>Owner: {d.owner} · Created: {fmtDate(d.created)}</div>
-          </div>
-          <span style={S.tag(d.status==='OPEN'?"#FFF3E0":"#E8F5E9",d.status==='OPEN'?"#E65100":"#2E7D32")}>{d.status}</span>
         </div>
-        <p style={{fontSize:12,color:"#555",margin:"10px 0 0",lineHeight:1.6}}>{d.notes}</p>
-        {d.status==='OPEN'&&<button style={{...S.btn("success"),marginTop:12,fontSize:11}} onClick={()=>resolve(d.id)}>Mark Resolved</button>}
-      </div>)}
+      )}
     </div>
-  </div>;
+  );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: RENEWALS
-// ═══════════════════════════════════════════════════════════════════════════════
-function RenewalsTab({members}){
-  const paid = members.filter(m=>m.membershipExpiry).sort((a,b)=>new Date(a.membershipExpiry)-new Date(b.membershipExpiry));
-  const now = Date.now();
-  const getUrgency = exp => { const d=(new Date(exp)-now)/(864e5); return d<0?"expired":d<7?"critical":d<30?"soon":"ok"; };
-  return <div className="fade">
-    <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:"0 0 4px"}}>Renewal Tracker</h1>
-    <p style={{color:"#888",margin:"0 0 22px",fontSize:12}}>Manual renewal flow — Eber does not support auto-renewal</p>
-
-    <div style={S.limit}>🚫 <div><strong>Eber Limitation:</strong> Automated membership renewal is NOT supported due to refund risk. All renewals must be manual.</div></div>
-    <div style={S.ok}>✅ <div><strong>AI Workaround Active:</strong> Gmail MCP reminders triggered at 30-day, 7-day, and 1-day intervals before expiry. One-tap renewal link included.</div></div>
-
-    <div style={S.card}>
-      <table style={S.table}><thead><tr>
-        <th style={S.th}>Member</th><th style={S.th}>Tier</th><th style={S.th}>Expiry</th><th style={S.th}>Days Left</th><th style={S.th}>Urgency</th><th style={S.th}>Reminder</th>
-      </tr></thead><tbody>
-        {paid.map(m=>{
-          const days=Math.ceil((new Date(m.membershipExpiry)-now)/(864e5));
-          const u=getUrgency(m.membershipExpiry);
-          return <tr key={m.id}>
-            <td style={S.td}><div style={{fontWeight:500}}>{m.name}</div><div style={{fontSize:10,color:"#999"}}>{m.id}</div></td>
-            <td style={S.td}><span style={S.tier(m.tier)}>{m.tier}</span></td>
-            <td style={{...S.td,fontSize:11}}>{fmtDate(m.membershipExpiry)}</td>
-            <td style={{...S.td,fontWeight:600,color:u==='expired'?"#D32F2F":u==='critical'?"#D32F2F":u==='soon'?"#FF9800":"#4CAF50"}}>{days<0?`${Math.abs(days)}d overdue`:`${days}d`}</td>
-            <td style={S.td}><span style={S.tag(u==='expired'?"#FFEBEE":u==='critical'?"#FFEBEE":u==='soon'?"#FFF3E0":"#E8F5E9",u==='expired'||u==='critical'?"#C62828":u==='soon'?"#E65100":"#2E7D32")}>{u}</span></td>
-            <td style={S.td}><button style={{...S.btn("gold"),padding:"4px 12px",fontSize:10}}>Send Reminder</button></td>
-          </tr>;
-        })}
-      </tbody></table>
-    </div>
-  </div>;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: STAFF
-// ═══════════════════════════════════════════════════════════════════════════════
-function StaffTab({staffReg}){
-  return <div className="fade">
-    <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:"0 0 4px"}}>Staff Registry</h1>
-    <p style={{color:"#888",margin:"0 0 22px",fontSize:12}}>Staff tier onboarding and dual-account tracking</p>
-
-    <div style={S.limit}>🚫 <div><strong>Eber Limitation:</strong> One mobile number = one account. Staff cannot hold both a personal and staff membership on the same number. This is a platform-level restriction and cannot be overridden.</div></div>
-
-    <div style={S.card}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <div style={S.cardT}>Staff Members</div>
-        <button style={S.btn("primary")}>+ Onboard Staff</button>
-      </div>
-      <table style={S.table}><thead><tr>
-        <th style={S.th}>Name</th><th style={S.th}>Personal Mobile</th><th style={S.th}>Staff Mobile</th><th style={S.th}>Status</th><th style={S.th}>Notes</th>
-      </tr></thead><tbody>
-        {staffReg.map((s,i)=><tr key={i}>
-          <td style={{...S.td,fontWeight:500}}>{s.name}</td>
-          <td style={{...S.td,fontSize:11,fontFamily:font.m}}>{s.personalMobile||"—"}</td>
-          <td style={{...S.td,fontSize:11,fontFamily:font.m}}>{s.staffMobile}</td>
-          <td style={S.td}><span style={S.tag("#E8F5E9","#2E7D32")}>{s.status}</span></td>
-          <td style={{...S.td,fontSize:11,color:"#666"}}>{s.notes}</td>
-        </tr>)}
-      </tbody></table>
-    </div>
-
-    <div style={S.card}>
-      <div style={S.cardT}>Staff Onboarding SOP</div>
-      {[
-        {step:1,title:"Check existing registration",desc:"Search Eber for the staff member's personal mobile number"},
-        {step:2,title:"If found — offer options",desc:"(a) Convert existing account to Staff tier, OR (b) Register with an alternate mobile number"},
-        {step:3,title:"If not found — register directly",desc:"Create new Staff tier account using the staff member's chosen mobile number"},
-        {step:4,title:"Record in Staff Registry",desc:"Log both personal and staff mobile numbers for HR/ops reference"},
-        {step:5,title:"Issue Staff benefits",desc:"Configure staff-specific vouchers and internal event access"},
-      ].map(x=><div key={x.step} style={{display:"flex",gap:14,alignItems:"flex-start",padding:"12px 0",borderBottom:x.step<5?"1px solid #f5f5f5":"none"}}>
-        <div style={{width:32,height:32,borderRadius:"50%",background:"#E8F5E9",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:13,color:"#2E7D32",flexShrink:0}}>{x.step}</div>
-        <div><div style={{fontWeight:600,fontSize:13}}>{x.title}</div><div style={{fontSize:11,color:"#666",marginTop:2}}>{x.desc}</div></div>
-      </div>)}
-    </div>
-  </div>;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAB: CHECKLIST
-// ═══════════════════════════════════════════════════════════════════════════════
-function ChecklistTab({decisions,promotions}){
-  const openD = decisions.filter(d=>d.status==='OPEN').length;
-  const pendingExcl = promotions.filter(p=>p.status==='upcoming'&&!p.exclusionApplied).length;
-
-  const sections = [
-    { title:"Pre-Launch Checklist", items:[
-      {t:"All tier definitions configured in Staging",done:true},
-      {t:"Member card artwork supplied at 1200×758px",done:true},
-      {t:"Points rules set (earn rates, exclusions, expiry = 12 months)",done:true},
-      {t:"Welcome vouchers configured for all tiers",done:true},
-      {t:"Dining voucher sets created with calendar-year expiry",done:true},
-      {t:"Stamp card configured for café outlets (exact store names)",done:true},
-      {t:"Discover tab visibility dates set (launch vs. regular)",done:false},
-      {t:"Stripe connected to JEPL account and tested",done:true},
-      {t:`Staff tier mechanics confirmed (${openD>0?'BLOCKED — '+openD+' open decisions':'Done'})`,done:openD===0},
-      {t:"Bar voucher applicability confirmed with Brendon",done:!decisions.some(d=>d.decision.includes("Bar")&&d.status==='OPEN')},
-      {t:"Staging tested end-to-end → Production sign-off",done:false},
-    ]},
-    { title:"Annual Recurring Tasks", items:[
-      {t:"November: Create next year's voucher set in Staging",done:false},
-      {t:"December: Test and migrate voucher set to Production",done:false},
-      {t:"January: Verify launch voucher visibility (Jan only)",done:false},
-      {t:"February: Verify regular voucher visibility (permanent)",done:false},
-      {t:"Quarterly: Review stamp card time-restriction effectiveness",done:false},
-      {t:"Monthly: Generate voucher refill nudge campaigns",done:false},
-    ]},
-    { title:"Per-Promotion Tasks", warn:pendingExcl>0?`${pendingExcl} upcoming promotion(s) missing exclusion rules`:null, items:[
-      {t:"Update Eber points rules BEFORE promotion starts",done:false},
-      {t:"Update Eber stamp rules for café outlets if applicable",done:false},
-      {t:"Set Google Calendar reminder to REVERT rules after",done:false},
-      {t:"Verify no overlapping promotions",done:false},
-      {t:"Document promotion in the Promotion Calendar",done:false},
-    ]},
+// ═══════════════════════════════════════════════
+// TAB 3: VOUCHERS
+// ═══════════════════════════════════════════════
+function Vouchers() {
+  const vouchers = [
+    { type: "Welcome", tiers: "All tiers", trigger: "Signup", values: "Silver: $10 (min $20 spend) · Gold/Plat/Corp: $10", auto: true },
+    { type: "Dining (Non-Stop Hits)", tiers: "Gold, Platinum, Corporate", trigger: "Signup + refill", values: "Gold: 10×$20 ($200) · Plat: 10×$25 ($250) · Corp: 10×$20 ($200)", auto: true },
+    { type: "Points Redemption", tiers: "All (excl Staff)", trigger: "Member redeems points", values: "100pts=$10 · 150pts=$15 · 250pts=$25 (base rate)", auto: false },
+    { type: "Birthday Discount", tiers: "All", trigger: "Birthday month", values: "Silver 10% · Gold 15% · Plat 20% · Corp 15% (% off total bill, NOT voucher)", auto: true },
   ];
 
-  return <div className="fade">
-    <h1 style={{fontSize:28,fontWeight:700,fontFamily:font.h,margin:"0 0 4px"}}>Operational Checklists</h1>
-    <p style={{color:"#888",margin:"0 0 22px",fontSize:12}}>Eber platform operational requirements and recurring tasks</p>
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <h2 style={s.h2}>Voucher Management</h2>
+      <div style={s.bannerAmber}><span>⚠️</span><div><strong>P&L Treatment:</strong> Voucher redemption = revenue (ENT-voucher line), NOT COGS discount. Finance team must note this for reporting.</div></div>
 
-    {sections.map((sec,si)=><div key={si} style={S.card}>
-      <div style={S.cardT}>{sec.title}</div>
-      {sec.warn&&<div style={S.warn}>⚠️ <div>{sec.warn}</div></div>}
-      {sec.items.map((item,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:i<sec.items.length-1?"1px solid #f5f5f5":"none"}}>
-        <div style={{width:20,height:20,borderRadius:5,border:item.done?"none":"2px solid #ddd",background:item.done?"#4CAF50":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          {item.done&&<span style={{color:"#fff",fontSize:12,fontWeight:700}}>✓</span>}
+      <div style={{ display: "grid", gap: 16, marginBottom: 24 }}>
+        {vouchers.map((v, i) => (
+          <div key={i} style={s.card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <h3 style={{ ...s.h3, margin: 0 }}>{v.type}</h3>
+              <span style={{ fontSize: 10, padding: "3px 10px", borderRadius: 10, background: v.auto ? "#E8F5E9" : "#E3F2FD", color: v.auto ? "#2E7D32" : "#1565C0", fontWeight: 600 }}>
+                {v.auto ? "Auto-issue" : "Manual"}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}><strong>Tiers:</strong> {v.tiers}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}><strong>Trigger:</strong> {v.trigger}</div>
+            <div style={{ fontSize: 12, color: C.text }}><strong>Values:</strong> {v.values}</div>
+          </div>
+        ))}
+      </div>
+
+      <h3 style={s.h3}>Non-Stop Hits Mechanics</h3>
+      <div style={s.card}>
+        <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+          Paid tier members (Gold, Platinum, Corporate) receive unlimited dining voucher refills. When a member fully uses their voucher set, a new set becomes available for <strong>manual claim via the Discover tab</strong>. First set follows calendar-year expiry; subsequent sets do not.
         </div>
-        <span style={{fontSize:12,color:item.done?"#999":"#333",textDecoration:item.done?"line-through":"none"}}>{item.t}</span>
-      </div>)}
-    </div>)}
-  </div>;
+        <div style={{ ...s.bannerRed, marginTop: 12 }}><span>🚫</span><div><strong>L06:</strong> Cannot apply calendar-year expiry to 2nd+ manually-claimed voucher sets.<br /><strong>L08:</strong> No auto-refill — members must manually claim from Discover tab.</div></div>
+      </div>
+
+      <h3 style={s.h3}>Annual Voucher Lifecycle</h3>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        {VOUCHER_LIFECYCLE.map((l, i) => (
+          <div key={i} style={{ ...s.card, flex: "1 1 180px", textAlign: "center", minWidth: 160 }}>
+            <div style={{ fontSize: 24, marginBottom: 8 }}>{l.icon}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{l.month}</div>
+            <div style={{ fontSize: 11.5, color: C.muted }}>{l.action}</div>
+          </div>
+        ))}
+      </div>
+
+      <h3 style={{ ...s.h3, marginTop: 24 }}>Stacking Rules</h3>
+      <div style={s.card}>
+        {[
+          { combo: "Cash voucher + Points voucher", ok: true },
+          { combo: "Cash voucher + Cash voucher", ok: false },
+          { combo: "Points voucher + Points voucher", ok: false },
+          { combo: "Any voucher + Birthday discount", ok: false },
+          { combo: "Any voucher + Active promotion", ok: false },
+          { combo: "Stamp rewards + Stamp rewards", ok: true },
+        ].map((r, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid #f5f5f5", fontSize: 12.5 }}>
+            <span style={{ fontSize: 14 }}>{r.ok ? "✅" : "❌"}</span> {r.combo}
+          </div>
+        ))}
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Max per check: 1 cash voucher + 1 points voucher</div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// TAB 4: STAMPS
+// ═══════════════════════════════════════════════
+function StampsTab() {
+  const [aiResult, setAiResult] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+
+  const runAnalyser = async () => {
+    setAiLoading(true);
+    setAiResult("");
+    try {
+      const res = await askClaude(SYS_STAMP, "Analyse typical café spending patterns at Wildseed Café outlets. Average check $18-25, regulars visit 2-3x/month. Recommend optimal time-based restriction window to prevent stamp back-door abuse. Consider the balance between preventing abuse and not penalising genuine frequent visitors.");
+      setAiResult(res);
+    } catch { setAiResult("Error — please try again."); }
+    setAiLoading(false);
+  };
+
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <h2 style={s.h2}>Café Stamp Programme</h2>
+      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>$10 spent = 1 stamp · Café outlets only · 10-stamp card cycle · All tiers</div>
+
+      <div style={s.bannerRed}><span>🚫</span><div><strong>Back-door Issue (L10/L11):</strong> When a member retains unclaimed stamps, the same reward can re-trigger. Multi-transaction splits ($30 across 2 txns) can trigger the same reward twice. Eber cannot natively prevent this.</div></div>
+      <div style={s.bannerGreen}><span>✅</span><div><strong>Workaround:</strong> Time-based claim limit (e.g., once per 2 months) as proxy for card cycle restriction. Use AI Stamp Card Analyser to calibrate.</div></div>
+
+      <h3 style={s.h3}>Stamp Card Milestones</h3>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 24 }}>
+        {STAMPS.map((st, i) => (
+          <div key={i} style={{
+            width: 90, height: 90, borderRadius: 12, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+            background: st.reward ? (st.auto ? "#E8F5E9" : "#FFF8E1") : "#f5f5f5",
+            border: st.reward ? (st.auto ? "2px solid #4CAF50" : "2px solid #FFB300") : "2px solid #e0e0e0",
+          }}>
+            <div style={{ fontFamily: FONT.h, fontSize: 20, fontWeight: 700 }}>{st.s}</div>
+            {st.reward && (
+              <>
+                <div style={{ fontSize: 8, textAlign: "center", padding: "0 4px", color: st.auto ? "#2E7D32" : "#F57F17", fontWeight: 600, marginTop: 2 }}>
+                  {st.auto ? "AUTO" : "MANUAL"}
+                </div>
+                <div style={{ fontSize: 7.5, textAlign: "center", padding: "0 4px", color: "#666", marginTop: 1 }}>{st.reward.slice(0, 25)}</div>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <h3 style={s.h3}>Burn Mechanic</h3>
+      <div style={{ ...s.card, fontSize: 13 }}>
+        Stamps are deducted upon reward claim. Example: 7 stamps earned → 3rd-stamp reward claimed → 3 stamps burned → 4 stamps remain. Stamps continue accumulating if a milestone is reached but not yet claimed.
+      </div>
+
+      <h3 style={s.h3}>Café Outlets</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
+        {CAFE_OUTLETS.map((o, i) => (
+          <div key={i} style={{ ...s.card, display: "flex", alignItems: "center", gap: 12, padding: 14 }}>
+            <span style={{ fontSize: 20 }}>☕</span>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{o.name}</div>
+              <div style={{ fontSize: 11, color: C.muted }}>{o.location}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={s.aiPanel}>
+        <div style={s.aiBadge}>✦ AI STAMP CARD ANALYSER</div>
+        <p style={{ fontSize: 13, color: "#ccc", margin: "12px 0" }}>Analyse café spending patterns to calibrate the optimal time-based restriction window for the back-door workaround.</p>
+        <button onClick={runAnalyser} disabled={aiLoading} style={{ ...s.btn, opacity: aiLoading ? 0.5 : 1 }}>
+          {aiLoading ? "Analysing…" : "Run Analysis"}
+        </button>
+        {aiResult && <pre style={{ marginTop: 16, fontSize: 12, lineHeight: 1.6, color: "#eee", whiteSpace: "pre-wrap", fontFamily: FONT.b }}>{aiResult}</pre>}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// TAB 5: TIERS
+// ═══════════════════════════════════════════════
+function TiersTab({ members }) {
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <h2 style={s.h2}>Membership Tiers</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        {TIERS_DATA.map(t => {
+          const count = members.filter(m => m.tier === t.id).length;
+          const tier = TIER[t.id];
+          const isPlat = t.id === "platinum";
+          return (
+            <div key={t.id} style={{ background: tier.grad, borderRadius: 16, padding: 24, color: isPlat || t.id === "corporate" || t.id === "staff" ? "#fff" : C.text, position: "relative" }}>
+              {t.paid && <div style={{ position: "absolute", top: 12, right: 12, background: "rgba(255,255,255,.2)", borderRadius: 8, padding: "3px 10px", fontSize: 10, fontWeight: 600 }}>
+                {t.fee ? `$${t.fee}/yr via Stripe` : "By Invite"}
+              </div>}
+              <div style={{ fontFamily: FONT.h, fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.name}</div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 16 }}>{count} member{count !== 1 ? "s" : ""}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+                <div><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, opacity: .7 }}>Earn Rate</div><div style={{ fontWeight: 600, fontSize: 13 }}>{t.earn}</div></div>
+                <div><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, opacity: .7 }}>Birthday</div><div style={{ fontWeight: 600, fontSize: 13 }}>{t.bday}</div></div>
+                <div><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, opacity: .7 }}>Vouchers</div><div style={{ fontWeight: 600, fontSize: 13 }}>{t.vouchers}</div></div>
+              </div>
+              <div style={{ fontSize: 11.5, lineHeight: 1.8, opacity: 0.9 }}>
+                {t.benefits.map((b, i) => <div key={i}>• {b}</div>)}
+              </div>
+              {t.nonStop && <div style={{ marginTop: 12, background: "rgba(255,255,255,.15)", borderRadius: 8, padding: "6px 12px", fontSize: 11, fontWeight: 600 }}>🔄 Non-Stop Hits Active</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// TAB 6: PROMOTIONS
+// ═══════════════════════════════════════════════
+function Promotions({ campaigns, reload }) {
+  const [showForm, setShowForm] = useState(false);
+  const [aiResult, setAiResult] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [prompt, setPrompt] = useState("");
+
+  const runCampaignAI = async () => {
+    if (!prompt.trim()) return;
+    setAiLoading(true);
+    try { setAiResult(await askClaude(SYS_CAMPAIGN, prompt)); } catch { setAiResult("Error"); }
+    setAiLoading(false);
+  };
+
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={s.h2}>Promotions & Campaigns</h2>
+      </div>
+
+      <div style={s.bannerAmber}><span>⚠️</span><div><strong>CRITICAL:</strong> Eber cannot auto-exclude promotional items from points accrual. You MUST update backend rules BEFORE every promotion starts, and REVERT after it ends.</div></div>
+
+      <h3 style={s.h3}>Per-Promotion Checklist</h3>
+      <div style={{ ...s.card, marginBottom: 24 }}>
+        {["Update Eber points rules to EXCLUDE promo transactions BEFORE start", "Update stamp rules for café outlets if applicable", "Set Google Calendar reminder to REVERT rules after end", "Verify no overlapping promotions", "Document in Promotion Calendar"].map((item, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", fontSize: 12.5, borderBottom: "1px solid #f5f5f5" }}>
+            <span style={{ fontSize: 14 }}>☐</span> {item}
+          </div>
+        ))}
+      </div>
+
+      <h3 style={s.h3}>Campaigns from Supabase</h3>
+      {campaigns.length > 0 ? campaigns.map((c, i) => (
+        <div key={i} style={{ ...s.card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div>
+            <div style={{ fontSize: 11, color: C.muted }}>{c.type} · {c.start_date} → {c.end_date}</div>
+          </div>
+          <span style={s.badge(c.status === "active" ? "gold" : "silver")}>{c.status}</span>
+        </div>
+      )) : <div style={{ color: C.muted, fontSize: 13 }}>No campaigns in database</div>}
+
+      <div style={{ ...s.aiPanel, marginTop: 24 }}>
+        <div style={s.aiBadge}>✦ AI CAMPAIGN BUILDER</div>
+        <textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Describe your campaign idea (e.g., 'Mother's Day double points at all restaurants')…" style={{ width: "100%", background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.15)", borderRadius: 8, padding: 12, color: "#fff", fontSize: 13, fontFamily: FONT.b, minHeight: 60, marginTop: 12, resize: "vertical" }} />
+        <button onClick={runCampaignAI} disabled={aiLoading} style={{ ...s.btn, marginTop: 8, opacity: aiLoading ? 0.5 : 1 }}>
+          {aiLoading ? "Designing…" : "Design Campaign"}
+        </button>
+        {aiResult && <pre style={{ marginTop: 16, fontSize: 12, lineHeight: 1.6, color: "#eee", whiteSpace: "pre-wrap", fontFamily: FONT.b }}>{aiResult}</pre>}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// TAB 7: DECISIONS
+// ═══════════════════════════════════════════════
+function Decisions() {
+  const [items, setItems] = useState(INIT_DECISIONS);
+
+  const toggle = (id) => setItems(prev => prev.map(d => d.id === id ? { ...d, status: d.status === "open" ? "resolved" : "open" } : d));
+
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <h2 style={s.h2}>Decision Log</h2>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <span style={{ fontSize: 12, color: C.muted }}>Open: {items.filter(d=>d.status==="open").length}</span>
+        <span style={{ fontSize: 12, color: "#4CAF50" }}>Resolved: {items.filter(d=>d.status==="resolved").length}</span>
+      </div>
+      {items.map(d => (
+        <div key={d.id} style={{ ...s.card, display: "flex", alignItems: "center", gap: 16, opacity: d.status === "resolved" ? 0.5 : 1 }}>
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: d.status === "open" ? "#FF9800" : "#4CAF50", flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, textDecoration: d.status === "resolved" ? "line-through" : "none" }}>{d.title}</div>
+            <div style={{ fontSize: 11, color: C.muted }}>{d.note}</div>
+          </div>
+          <button style={s.btnSm} onClick={() => toggle(d.id)}>
+            {d.status === "open" ? "Resolve" : "Reopen"}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// TAB 8: RENEWALS
+// ═══════════════════════════════════════════════
+function Renewals({ members }) {
+  const [aiResult, setAiResult] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiMember, setAiMember] = useState(null);
+
+  const paidMembers = members.filter(m => m.membership_expiry).sort((a, b) => new Date(a.membership_expiry) - new Date(b.membership_expiry));
+
+  const daysUntil = (d) => { const diff = (new Date(d) - new Date()) / (1000*60*60*24); return Math.ceil(diff); };
+
+  const urgencyColor = (days) => days < 0 ? "#D32F2F" : days <= 7 ? "#D32F2F" : days <= 30 ? "#FF9800" : "#4CAF50";
+
+  const genReminder = async (member) => {
+    setAiMember(member);
+    setAiLoading(true);
+    const days = daysUntil(member.membership_expiry);
+    const timing = days <= 1 ? "1 day" : days <= 7 ? "7 days" : "30 days";
+    try {
+      setAiResult(await askClaude(SYS_RENEWAL, `Write a ${timing}-before-expiry renewal reminder for: Name: ${member.name}, Tier: ${member.tier}, Points: ${member.points}, Visits: ${member.visits}. Expiry: ${member.membership_expiry}.`));
+    } catch { setAiResult("Error"); }
+    setAiLoading(false);
+  };
+
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <h2 style={s.h2}>Renewal Management</h2>
+      <div style={s.bannerRed}><span>🚫</span><div><strong>L02:</strong> Eber does not support auto-renewal. Manual reminder workflow required (Gmail MCP at 30d/7d/1d).</div></div>
+
+      {paidMembers.length > 0 ? paidMembers.map(m => {
+        const days = daysUntil(m.membership_expiry);
+        return (
+          <div key={m.id} style={{ ...s.card, display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: urgencyColor(days), flexShrink: 0 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{m.name} <span style={s.badge(m.tier)}>{m.tier}</span></div>
+              <div style={{ fontSize: 11, color: C.muted }}>{m.id} · Expires: {new Date(m.membership_expiry).toLocaleDateString()}</div>
+            </div>
+            <div style={{ fontWeight: 600, fontSize: 13, color: urgencyColor(days) }}>
+              {days < 0 ? "EXPIRED" : `${days}d left`}
+            </div>
+            <button style={s.btnSm} onClick={() => genReminder(m)}>AI Reminder</button>
+          </div>
+        );
+      }) : <div style={{ color: C.muted }}>No paid members with expiry dates found</div>}
+
+      {aiResult && (
+        <div style={{ ...s.aiPanel, marginTop: 24 }}>
+          <div style={s.aiBadge}>✦ AI RENEWAL REMINDER</div>
+          {aiMember && <div style={{ fontSize: 12, color: "#aaa", marginTop: 8 }}>For: {aiMember.name} ({aiMember.tier})</div>}
+          <pre style={{ marginTop: 12, fontSize: 12, lineHeight: 1.6, color: "#eee", whiteSpace: "pre-wrap", fontFamily: FONT.b }}>{aiResult}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// TAB 9: STAFF
+// ═══════════════════════════════════════════════
+function StaffTab({ members }) {
+  const staff = members.filter(m => m.tier === "staff");
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <h2 style={s.h2}>Staff Management</h2>
+      <div style={s.bannerAmber}><span>⚠️</span><div><strong>Dual-Account Warning:</strong> Eber enforces one mobile number = one account. Staff cannot hold a personal and staff account on the same number. Use an alternate mobile for the staff tier.</div></div>
+      <div style={s.bannerRed}><span>🚫</span><div><strong>Restriction:</strong> Staff tier mechanics must be provided to Eber before config can begin. Not part of original programme scope — requires separate brief.</div></div>
+
+      <h3 style={s.h3}>Staff Members ({staff.length})</h3>
+      {staff.length > 0 ? staff.map(m => (
+        <div key={m.id} style={{ ...s.card, display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ width: 36, height: 36, borderRadius: "50%", background: TIER.staff.grad, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 600, fontSize: 14 }}>{(m.name||"S")[0]}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>{m.name}</div>
+            <div style={{ ...s.mono, fontSize: 11, color: C.muted }}>{m.id} · {m.mobile}</div>
+          </div>
+          <span style={s.badge("staff")}>Staff</span>
+        </div>
+      )) : <div style={{ color: C.muted, fontSize: 13 }}>No staff members registered yet</div>}
+
+      <h3 style={{ ...s.h3, marginTop: 24 }}>Onboarding SOP</h3>
+      <div style={s.card}>
+        {["Confirm staff member uses an alternate mobile number (not their personal 1-Insider number)", "Create account in Eber under Staff tier", "Issue staff-specific vouchers (details TBC)", "Brief staff on stamp programme (shared with customer tiers)", "Confirm birthday reward mechanics with management before Eber config"].map((step, i) => (
+          <div key={i} style={{ padding: "6px 0", fontSize: 12.5, borderBottom: "1px solid #f5f5f5" }}>{i + 1}. {step}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// TAB 10: CHECKLIST
+// ═══════════════════════════════════════════════
+function ChecklistTab() {
+  const [checks, setChecks] = useState(() => {
+    const init = {};
+    Object.entries(CHECKLISTS).forEach(([cat, items]) => {
+      items.forEach((_, i) => { init[`${cat}-${i}`] = false; });
+    });
+    return init;
+  });
+
+  const toggle = (key) => setChecks(prev => ({ ...prev, [key]: !prev[key] }));
+
+  return (
+    <div style={{ animation: "fadeIn .3s ease" }}>
+      <h2 style={s.h2}>Operational Checklists</h2>
+      {Object.entries(CHECKLISTS).map(([cat, items]) => {
+        const done = items.filter((_, i) => checks[`${cat}-${i}`]).length;
+        return (
+          <div key={cat} style={{ marginBottom: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <h3 style={s.h3}>{cat}</h3>
+              <span style={{ fontSize: 11, color: done === items.length ? "#4CAF50" : C.muted }}>{done}/{items.length} complete</span>
+            </div>
+            <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 8px rgba(0,0,0,.04)" }}>
+              {/* progress bar */}
+              <div style={{ height: 3, background: "#f0f0f0" }}>
+                <div style={{ height: 3, background: C.gold, width: `${(done/items.length)*100}%`, transition: "width .3s" }} />
+              </div>
+              {items.map((item, i) => {
+                const key = `${cat}-${i}`;
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: "1px solid #f5f5f5", cursor: "pointer", fontSize: 12.5 }} onClick={() => toggle(key)}>
+                    <div style={{ width: 18, height: 18, borderRadius: 4, border: checks[key] ? "none" : "1.5px solid #ccc", background: checks[key] ? C.gold : "transparent", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, flexShrink: 0 }}>
+                      {checks[key] && "✓"}
+                    </div>
+                    <span style={{ textDecoration: checks[key] ? "line-through" : "none", color: checks[key] ? C.muted : C.text }}>{item}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
