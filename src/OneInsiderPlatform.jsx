@@ -140,6 +140,23 @@ export default function App() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Demo reset: Ctrl+Shift+R resets Sophia to test defaults before page reloads
+  useEffect(() => {
+    var DEMO = { points: 5000, stamps: 10, vouchers_remaining: 10, voucher_sets_used: 1 };
+    var handleKey = function(e) {
+      if (e.ctrlKey && e.shiftKey && e.key === "R") {
+        e.preventDefault();
+        fetch(SUPA_URL + "/rest/v1/members?id=eq.M0001", {
+          method: "PATCH",
+          headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=representation" },
+          body: JSON.stringify(DEMO),
+        }).then(function() { window.location.reload(); });
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return function() { window.removeEventListener("keydown", handleKey); };
+  }, []);
+
   return (
     <div style={s.app}>
       <style>{
