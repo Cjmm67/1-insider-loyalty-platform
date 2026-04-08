@@ -151,7 +151,29 @@ const S = {
   ok: { background:"#E8F5E9", border:"1px solid #A5D6A7", borderRadius:10, padding:"14px 18px", fontSize:12, color:"#1B5E20", display:"flex", gap:10, alignItems:"flex-start", marginBottom:16, lineHeight:1.5 },
 };
 
-// ─── STORAGE ─────────────────────────────────────────────────────────────────
+// ─── SUPABASE + STORAGE ──────────────────────────────────────────────────────
+const SUPA_URL = "https://tobtmtshxgpkkucsaxyk.supabase.co";
+const SUPA_KEY = "sb_publishable_M_yQLmU_5yc0yTccm4F_oA_xWKyTqx9";
+const supaFetch = async (path, opts = {}) => {
+  const res = await fetch(`${SUPA_URL}/rest/v1/${path}`, {
+    headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": "application/json", "Prefer": opts.prefer || "return=representation", ...opts.headers },
+    method: opts.method || "GET", body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  return res.json();
+};
+const mapMember = m => ({
+  id:m.id, name:m.name, mobile:m.mobile, email:m.email, tier:m.tier, points:m.points,
+  totalSpend:m.total_spend||0, categoryPref:m.category_pref||"restaurants", birthdayMonth:m.birthday_month||1,
+  signupDate:m.signup_date||m.created_at, lastVisit:m.last_visit||m.created_at, visits:m.visits||0,
+  favouriteVenue:m.favourite_venue||"oumi", stamps:m.stamps||0, voucherSetsUsed:m.voucher_sets_used||0,
+  membershipExpiry:m.membership_expiry||null, renewalStatus:m.renewal_status||null,
+});
+const db = {
+  async getMembers(){ try{ const d=await supaFetch("members?order=id.asc"); return Array.isArray(d)?d.map(mapMember):[]; }catch{ return []; }},
+  async getRewards(){ try{ const d=await supaFetch("rewards?active=eq.true"); return Array.isArray(d)?d:[]; }catch{ return []; }},
+  async getTransactions(memberId){ try{ const d=await supaFetch(`transactions?member_id=eq.${memberId}&order=created_at.desc`); return Array.isArray(d)?d:[]; }catch{ return []; }},
+};
+// For admin-only data (decisions, promotions, vouchers, staff) use window.storage
 const store = {
   async get(k){ try{ const r=await window.storage.get(k); return r?JSON.parse(r.value):null }catch{ return null }},
   async set(k,v){ try{ await window.storage.set(k,JSON.stringify(v)); return true }catch{ return false }},
@@ -172,13 +194,21 @@ export default function OneInsiderPlatform() {
   const [searchQ,setSearchQ]=useState("");
 
   useEffect(()=>{(async()=>{
-    let m=await store.get("eber-members"); if(!m||!m.length){m=seedMembers();await store.set("eber-members",m)} setMembers(m);
+    // Members from Supabase (shared with member portal)
+    let m=await db.getMembers();
+    if(!m.length){m=seedMembers();} // fallback to seed if DB empty
+    setMembers(m);
+    // Admin-only data from window.storage
     let d=await store.get("eber-decisions"); if(!d||!d.length){d=seedDecisions();await store.set("eber-decisions",d)} setDecisions(d);
     let p=await store.get("eber-promotions"); if(!p||!p.length){p=seedPromotions();await store.set("eber-promotions",p)} setPromotions(p);
     let v=await store.get("eber-vouchers"); if(!v||!v.length){v=seedVouchers();await store.set("eber-vouchers",v)} setVouchers(v);
     let s=await store.get("eber-staff"); if(!s||!s.length){s=seedStaffRegistry();await store.set("eber-staff",s)} setStaffReg(s);
     setLoading(false);
   })()},[]);
+
+  // Refresh members from Supabase when switching to members/overview tab
+  const refreshMembers = async () => { const m=await db.getMembers(); if(m.length) setMembers(m); };
+  const handleTab = (t) => { setTab(t); if(t==="members"||t==="overview") refreshMembers(); };
 
   const callAI = async (prompt, sys) => {
     setAiLoading(true); setAiResult(null);
@@ -255,14 +285,14 @@ export default function OneInsiderPlatform() {
           <span style={S.badge}>3.0 · Eber · Admin</span>
         </div>
         <nav style={S.nav}>
-          {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={S.navBtn(tab===t.id)}>
+          {TABS.map(t=><button key={t.id} onClick={()=>handleTab(t.id)} style={S.navBtn(tab===t.id)}>
             <span style={{marginRight:5,fontSize:9,opacity:.7}}>{t.icon}</span>{t.label}
           </button>)}
         </nav>
       </header>
 
       <main style={S.main} className="fade">
-        {tab==="overview"&&<OverviewTab stats={stats} tierData={tierData} members={members} decisions={decisions} promotions={promotions} setTab={setTab}/>}
+        {tab==="overview"&&<OverviewTab stats={stats} tierData={tierData} members={members} decisions={decisions} promotions={promotions} setTab={handleTab}/>}
         {tab==="members"&&<MembersTab members={members} searchQ={searchQ} setSearchQ={setSearchQ} selectedMember={selectedMember} setSelectedMember={setSelectedMember}/>}
         {tab==="vouchers"&&<VouchersTab vouchers={vouchers} members={members}/>}
         {tab==="stamps"&&<StampsTab members={members} callAI={callAI} aiLoading={aiLoading} aiResult={aiResult} setAiResult={setAiResult}/>}
