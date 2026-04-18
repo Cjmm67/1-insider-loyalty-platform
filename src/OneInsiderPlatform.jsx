@@ -111,7 +111,7 @@ const s = {
 };
 
 const Spinner = () => <div style={{ width: 20, height: 20, border: "2px solid #ddd", borderTopColor: C.gold, borderRadius: "50%", animation: "spin .6s linear infinite" }} />;
-const TABS = ["Overview","Members","Vouchers","Stamps","Tiers","Promotions","Decisions","Renewals","Staff","Checklist"];
+const TABS = ["Overview","Members","Vouchers","Stamps","Tiers","Promotions","Decisions","Renewals","Staff","Stores","Checklist"];
 
 export default function App() {
   const [tab, setTab] = useState(0);
@@ -187,7 +187,8 @@ export default function App() {
         {tab===6 && <Decisions />}
         {tab===7 && <Renewals members={members} />}
         {tab===8 && <StaffTab members={members} />}
-        {tab===9 && <ChecklistTab />}
+        {tab===9 && <StoresTab />}
+        {tab===10 && <ChecklistTab />}
       </div>
     </div>
   );
@@ -683,6 +684,330 @@ function ChecklistTab() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── U23 STORES ───
+function StoresTab() {
+  const [stores, setStores] = useState([]);
+  const [admins, setAdmins] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState({ category: "all", status: "all", eligibility: "all" });
+  const [modal, setModal] = useState(null); // { mode: 'edit'|'create', store: {...} } | null
+  const [grantingAccess, setGrantingAccess] = useState(null);
+  const [currentAdminId, setCurrentAdminId] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [st, ad] = await Promise.all([
+        supaFetch("stores?order=category.asc&order=name.asc"),
+        supaFetch("admin_users?order=role.asc"),
+      ]);
+      if (Array.isArray(st)) setStores(st);
+      if (Array.isArray(ad)) {
+        setAdmins(ad);
+        const sa = ad.find(a => a.role === "super_admin");
+        if (sa) setCurrentAdminId(sa.id);
+      }
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]); // eslint-disable-line react-hooks/set-state-in-effect
+
+  const logAudit = async (entityType, entityId, action, before, after, reason) => {
+    if (!currentAdminId) return;
+    try {
+      await supaFetch("audit_log", {
+        method: "POST",
+        body: {
+          admin_user_id: currentAdminId,
+          entity_type: entityType,
+          entity_id: String(entityId),
+          action,
+          before_value: before,
+          after_value: after,
+          reason,
+        },
+      });
+    } catch (e) { console.error("Audit log failed:", e); }
+  };
+
+  const filtered = stores.filter(st => {
+    if (filters.category !== "all" && st.category !== filters.category) return false;
+    if (filters.status !== "all" && st.status !== filters.status) return false;
+    if (filters.eligibility === "points" && !st.points_eligible) return false;
+    if (filters.eligibility === "stamps" && !st.stamps_eligible) return false;
+    return true;
+  });
+
+  const blank = () => ({ id: "", name: "", address: "", category: "Restaurants", cuisine: "", location: "", points_eligible: true, stamps_eligible: false, sevenrooms_venue_id: "", agilysys_outlet_id: "", booking_url: "", featured: false, status: "active" });
+
+  const saveStore = async () => {
+    if (!modal) return;
+    const data = modal.store;
+    if (!data.name?.trim()) { alert("Name is required"); return; }
+    if (!data.category) { alert("Category is required"); return; }
+
+    if (modal.mode === "create") {
+      if (!data.id?.trim()) { alert("Store ID is required (e.g. 'oumi', 'wscafe-fh')"); return; }
+      if (!/^[a-z0-9-]+$/.test(data.id)) { alert("Store ID must be lowercase letters, digits, or hyphens only"); return; }
+      if (stores.some(st => st.id === data.id)) { alert(`Store ID '${data.id}' already exists`); return; }
+      const body = { ...data, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const r = await supaFetch("stores", { method: "POST", body });
+      if (Array.isArray(r) && r[0]) await logAudit("store", data.id, "create", null, r[0], null);
+    } else {
+      const before = stores.find(st => st.id === data.id);
+      const after = { ...data, updated_at: new Date().toISOString() };
+      delete after.created_at;
+      await supaFetch(`stores?id=eq.${data.id}`, { method: "PATCH", body: after });
+      await logAudit("store", data.id, "update", before, after, null);
+    }
+    setModal(null);
+    load();
+  };
+
+  const toggleStatus = async (store) => {
+    const newStatus = store.status === "active" ? "inactive" : "active";
+    const warnText = newStatus === "inactive"
+      ? `Deactivate ${store.name}?\n\nThis will hide it from Member Portal Explore Outlets, Reservations, and Promotion venue selectors. Active vouchers tied to this store remain valid.`
+      : `Activate ${store.name}?`;
+    if (!window.confirm(warnText)) return;
+    await supaFetch(`stores?id=eq.${store.id}`, { method: "PATCH", body: { status: newStatus, updated_at: new Date().toISOString() } });
+    await logAudit("store", store.id, "update", { status: store.status }, { status: newStatus }, `Status toggled to ${newStatus}`);
+    load();
+  };
+
+  const grantAccess = async (adminId) => {
+    const admin = admins.find(a => a.id === adminId);
+    if (!admin || !grantingAccess) return;
+    const current = admin.venue_scope || [];
+    if (current.includes(grantingAccess.id)) { alert(`${admin.name} already has access.`); return; }
+    const newScope = [...current, grantingAccess.id];
+    await supaFetch(`admin_users?id=eq.${adminId}`, { method: "PATCH", body: { venue_scope: newScope } });
+    await logAudit("admin_user", adminId, "grant_venue_access", { venue_scope: current }, { venue_scope: newScope }, `Granted access to ${grantingAccess.name}`);
+    setGrantingAccess(null);
+    load();
+  };
+
+  const revokeAccess = async (admin, storeId, storeName) => {
+    if (!window.confirm(`Revoke ${admin.name}'s access to ${storeName}?`)) return;
+    const current = admin.venue_scope || [];
+    const newScope = current.filter(v => v !== storeId);
+    await supaFetch(`admin_users?id=eq.${admin.id}`, { method: "PATCH", body: { venue_scope: newScope } });
+    await logAudit("admin_user", admin.id, "revoke_venue_access", { venue_scope: current }, { venue_scope: newScope }, `Revoked access to ${storeName}`);
+    load();
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={{ ...s.h2, marginBottom: 0 }}>Stores</h2>
+        <button onClick={() => setModal({ mode: "create", store: blank() })} style={s.btn}>+ New Store</button>
+      </div>
+
+      <div style={s.bannerGreen}>
+        <span>✅</span>
+        <div>
+          <strong>Single source of truth for all venues.</strong> Changes here reflect on Admin Overview, Member Portal Explore Outlets (U04), Reservations (U12), and Promotion venue selectors (U21). Remember to sync SevenRooms and Agilysys outlet IDs where applicable.
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={s.kpi}><div style={s.kpiLabel}>Total Stores</div><div style={s.kpiVal}>{stores.length}</div></div>
+        <div style={s.kpi}><div style={s.kpiLabel}>Active</div><div style={s.kpiVal}>{stores.filter(x => x.status === "active").length}</div></div>
+        <div style={s.kpi}><div style={s.kpiLabel}>Restaurants</div><div style={s.kpiVal}>{stores.filter(x => x.category === "Restaurants").length}</div></div>
+        <div style={s.kpi}><div style={s.kpiLabel}>Bars</div><div style={s.kpiVal}>{stores.filter(x => x.category === "Bars").length}</div></div>
+        <div style={s.kpi}><div style={s.kpiLabel}>Cafés</div><div style={s.kpiVal}>{stores.filter(x => x.category === "Cafés").length}</div></div>
+      </div>
+
+      <div style={{ ...s.card, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1.2 }}>Filters</span>
+        <select value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })} style={{ ...s.input, width: "auto", padding: "8px 12px" }}>
+          <option value="all">All categories</option>
+          <option value="Restaurants">Restaurants</option>
+          <option value="Bars">Bars</option>
+          <option value="Cafés">Cafés</option>
+        </select>
+        <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} style={{ ...s.input, width: "auto", padding: "8px 12px" }}>
+          <option value="all">All statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <select value={filters.eligibility} onChange={(e) => setFilters({ ...filters, eligibility: e.target.value })} style={{ ...s.input, width: "auto", padding: "8px 12px" }}>
+          <option value="all">All eligibility</option>
+          <option value="points">Points eligible</option>
+          <option value="stamps">Stamps eligible</option>
+        </select>
+        <div style={{ marginLeft: "auto", fontSize: 11, color: C.muted }}>{filtered.length} of {stores.length} shown</div>
+      </div>
+
+      <div style={s.card}>
+        {loading ? (
+          <div style={{ display: "flex", justifyContent: "center", padding: 40 }}><Spinner /></div>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: C.lmuted }}>No stores match the current filters.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1100 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: C.lmuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+                  <th style={{ padding: "10px 8px" }}>Name</th>
+                  <th style={{ padding: "10px 8px" }}>Category</th>
+                  <th style={{ padding: "10px 8px" }}>Location</th>
+                  <th style={{ padding: "10px 8px", textAlign: "center" }}>Points</th>
+                  <th style={{ padding: "10px 8px", textAlign: "center" }}>Stamps</th>
+                  <th style={{ padding: "10px 8px" }}>SR ID</th>
+                  <th style={{ padding: "10px 8px" }}>POS ID</th>
+                  <th style={{ padding: "10px 8px" }}>Status</th>
+                  <th style={{ padding: "10px 8px" }}>Admins</th>
+                  <th style={{ padding: "10px 8px" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(store => {
+                  const storeAdmins = admins.filter(a => (a.venue_scope || []).includes(store.id));
+                  return (
+                    <tr key={store.id} style={{ borderTop: "1px solid #eee" }}>
+                      <td style={{ padding: "10px 8px", fontWeight: 500 }}>
+                        {store.featured && <span style={{ color: C.gold, marginRight: 4 }}>★</span>}
+                        {store.name}
+                        <div style={{ ...s.mono, fontSize: 10, color: C.lmuted }}>{store.id}</div>
+                      </td>
+                      <td style={{ padding: "10px 8px", color: C.muted }}>{store.category}</td>
+                      <td style={{ padding: "10px 8px", color: C.muted, fontSize: 11.5 }}>{store.location}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center", color: store.points_eligible ? "#2E7D32" : C.lmuted }}>{store.points_eligible ? "✓" : "—"}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center", color: store.stamps_eligible ? "#2E7D32" : C.lmuted }}>{store.stamps_eligible ? "✓" : "—"}</td>
+                      <td style={{ padding: "10px 8px", ...s.mono, fontSize: 10.5, color: store.sevenrooms_venue_id ? C.text : C.lmuted }}>{store.sevenrooms_venue_id || "—"}</td>
+                      <td style={{ padding: "10px 8px", ...s.mono, fontSize: 10.5, color: store.agilysys_outlet_id ? C.text : C.lmuted }}>{store.agilysys_outlet_id || "—"}</td>
+                      <td style={{ padding: "10px 8px" }}>
+                        <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 10, fontSize: 10.5, fontWeight: 600, background: store.status === "active" ? "#E8F5E9" : "#FFEBEE", color: store.status === "active" ? "#2E7D32" : "#B71C1C" }}>
+                          {store.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: "10px 8px", fontSize: 11 }}>
+                        {storeAdmins.length === 0 ? <span style={{ color: C.lmuted }}>—</span> : storeAdmins.map(a => (
+                          <span key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#f5f5f5", borderRadius: 10, padding: "2px 8px", marginRight: 3, marginBottom: 2, fontSize: 10.5 }}>
+                            <span>{a.name.split(" ")[0]}</span>
+                            <span onClick={() => revokeAccess(a, store.id, store.name)} style={{ cursor: "pointer", color: "#D32F2F", fontWeight: 700 }} title={`Revoke ${a.name}'s access`}>×</span>
+                          </span>
+                        ))}
+                      </td>
+                      <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
+                        <button onClick={() => setModal({ mode: "edit", store: { ...store } })} style={s.btnSm}>Edit</button>
+                        {" "}
+                        <button onClick={() => setGrantingAccess(store)} style={{ ...s.btnSm, background: "#555" }}>+ Admin</button>
+                        {" "}
+                        <button onClick={() => toggleStatus(store)} style={store.status === "active" ? s.btnDanger : s.btnSuccess}>
+                          {store.status === "active" ? "Deactivate" : "Activate"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Edit / Create modal */}
+      {modal && (
+        <div style={s.modal} onClick={() => setModal(null)}>
+          <div style={s.modalInner} onClick={(e) => e.stopPropagation()}>
+            <div style={s.h3}>{modal.mode === "create" ? "New Store" : `Edit: ${modal.store.name}`}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Store ID</label>
+                <input style={{ ...s.input, marginTop: 4, background: modal.mode === "edit" ? "#f5f5f5" : "#fff" }} value={modal.store.id || ""} onChange={(e) => setModal({ ...modal, store: { ...modal.store, id: e.target.value } })} readOnly={modal.mode === "edit"} placeholder="e.g. oumi, wscafe-fh" />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Category</label>
+                <select style={{ ...s.input, marginTop: 4 }} value={modal.store.category || "Restaurants"} onChange={(e) => setModal({ ...modal, store: { ...modal.store, category: e.target.value } })}>
+                  <option>Restaurants</option>
+                  <option>Bars</option>
+                  <option>Cafés</option>
+                </select>
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Name</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={modal.store.name || ""} onChange={(e) => setModal({ ...modal, store: { ...modal.store, name: e.target.value } })} />
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Address</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={modal.store.address || ""} onChange={(e) => setModal({ ...modal, store: { ...modal.store, address: e.target.value } })} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Cuisine</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={modal.store.cuisine || ""} onChange={(e) => setModal({ ...modal, store: { ...modal.store, cuisine: e.target.value } })} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Location</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={modal.store.location || ""} onChange={(e) => setModal({ ...modal, store: { ...modal.store, location: e.target.value } })} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>SevenRooms Venue ID</label>
+                <input style={{ ...s.input, marginTop: 4, ...s.mono }} value={modal.store.sevenrooms_venue_id || ""} onChange={(e) => setModal({ ...modal, store: { ...modal.store, sevenrooms_venue_id: e.target.value } })} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Agilysys Outlet ID</label>
+                <input style={{ ...s.input, marginTop: 4, ...s.mono }} value={modal.store.agilysys_outlet_id || ""} onChange={(e) => setModal({ ...modal, store: { ...modal.store, agilysys_outlet_id: e.target.value } })} />
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Booking URL</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={modal.store.booking_url || ""} onChange={(e) => setModal({ ...modal, store: { ...modal.store, booking_url: e.target.value } })} placeholder="https://..." />
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, paddingTop: 16 }}>
+                <input type="checkbox" checked={!!modal.store.points_eligible} onChange={(e) => setModal({ ...modal, store: { ...modal.store, points_eligible: e.target.checked } })} /> Points eligible
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, paddingTop: 16 }}>
+                <input type="checkbox" checked={!!modal.store.stamps_eligible} onChange={(e) => setModal({ ...modal, store: { ...modal.store, stamps_eligible: e.target.checked } })} /> Stamps eligible
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                <input type="checkbox" checked={!!modal.store.featured} onChange={(e) => setModal({ ...modal, store: { ...modal.store, featured: e.target.checked } })} /> Featured
+              </label>
+            </div>
+            <div style={{ ...s.bannerAmber, marginTop: 16 }}>
+              <span>⚠️</span>
+              <div>Remember to mirror any outlet ID or eligibility changes in SevenRooms and Agilysys. This page is the 1-Insider source of truth, not those systems.</div>
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+              <button onClick={() => setModal(null)} style={{ ...s.btnSm, background: "#eee", color: "#555" }}>Cancel</button>
+              <button onClick={saveStore} style={s.btn}>{modal.mode === "create" ? "Create store" : "Save changes"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Grant access modal */}
+      {grantingAccess && (
+        <div style={s.modal} onClick={() => setGrantingAccess(null)}>
+          <div style={{ ...s.modalInner, maxWidth: 500 }} onClick={(e) => e.stopPropagation()}>
+            <div style={s.h3}>Grant admin access</div>
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
+              Scope an admin to <strong style={{ color: C.text }}>{grantingAccess.name}</strong>. The admin&apos;s <code style={s.mono}>venue_scope</code> will be updated and audit-logged.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {admins.filter(a => !(a.venue_scope || []).includes(grantingAccess.id)).length === 0 ? (
+                <div style={{ padding: 16, textAlign: "center", color: C.lmuted, fontSize: 13 }}>All admins already have access to this store.</div>
+              ) : admins.filter(a => !(a.venue_scope || []).includes(grantingAccess.id)).map(a => (
+                <div key={a.id} onClick={() => grantAccess(a.id)} style={{ border: "1px solid #eee", borderRadius: 8, padding: 12, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }} onMouseEnter={(e) => e.currentTarget.style.background = "#f9f9f9"} onMouseLeave={(e) => e.currentTarget.style.background = "#fff"}>
+                  <div>
+                    <div style={{ fontWeight: 500, fontSize: 13 }}>{a.name}</div>
+                    <div style={{ fontSize: 11, color: C.muted, ...s.mono }}>{a.email} · {a.role.replace("_"," ")}</div>
+                  </div>
+                  <div style={{ fontSize: 11, color: C.lmuted }}>{(a.venue_scope || []).length} scoped</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setGrantingAccess(null)} style={{ ...s.btnSm, background: "#eee", color: "#555" }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
