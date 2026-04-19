@@ -111,7 +111,7 @@ const s = {
 };
 
 const Spinner = () => <div style={{ width: 20, height: 20, border: "2px solid #ddd", borderTopColor: C.gold, borderRadius: "50%", animation: "spin .6s linear infinite" }} />;
-const TABS = ["Overview","Members","Vouchers","Stamps","Tiers","Promotions","Decisions","Renewals","Staff","Stores","Checklist"];
+const TABS = ["Overview","Members","Vouchers","Stamps","Tiers","Promotions","Decisions","Renewals","Admin Users","Stores","Checklist"];
 
 export default function App() {
   const [tab, setTab] = useState(0);
@@ -186,7 +186,7 @@ export default function App() {
         {tab===5 && <Promotions campaigns={campaigns} />}
         {tab===6 && <Decisions />}
         {tab===7 && <Renewals members={members} />}
-        {tab===8 && <StaffTab members={members} />}
+        {tab===8 && <AdminUsersTab members={members} />}
         {tab===9 && <StoresTab />}
         {tab===10 && <ChecklistTab />}
       </div>
@@ -637,20 +637,457 @@ function Renewals({ members }) {
   );
 }
 
-// ─── STAFF ───
-function StaffTab({ members }) {
-  var staff = members.filter(m => m.tier==="staff");
+// ─── U22 ADMIN USERS & PERMISSIONS (formerly Staff tab) ───
+const ROLE_LABELS = {
+  super_admin: "Super Admin",
+  venue_manager: "Venue Manager",
+  finance: "Finance",
+  marketing: "Marketing",
+  viewer: "Viewer",
+};
+
+const ROLE_COLORS = {
+  super_admin:   { bg: "#FDF8EE", fg: "#8B6914" },
+  venue_manager: { bg: "#E8F5E9", fg: "#2E7D32" },
+  finance:       { bg: "#E8EFF5", fg: "#1A3A5C" },
+  marketing:     { bg: "#EDE7F6", fg: "#4527A0" },
+  viewer:        { bg: "#F7F7F7", fg: "#666" },
+};
+
+const PERMISSIONS_MATRIX = [
+  { area: "Stores (CRUD)",            super_admin: "✓",    venue_manager: "Scoped", finance: "View",  marketing: "View",  viewer: "View" },
+  { area: "Members (edit profile)",   super_admin: "✓",    venue_manager: "—",      finance: "—",     marketing: "—",     viewer: "View" },
+  { area: "Vouchers (add/remove)",    super_admin: "✓",    venue_manager: "Scoped", finance: "—",     marketing: "—",     viewer: "View" },
+  { area: "Voucher catalogue",        super_admin: "✓",    venue_manager: "—",      finance: "✓",     marketing: "✓",     viewer: "View" },
+  { area: "Tiers config",             super_admin: "✓",    venue_manager: "—",      finance: "—",     marketing: "—",     viewer: "View" },
+  { area: "Stamps config",            super_admin: "✓",    venue_manager: "—",      finance: "—",     marketing: "✓",     viewer: "View" },
+  { area: "Promotions builder",       super_admin: "✓",    venue_manager: "Scoped", finance: "—",     marketing: "✓",     viewer: "View" },
+  { area: "Admin users",              super_admin: "✓",    venue_manager: "—",      finance: "—",     marketing: "—",     viewer: "—" },
+  { area: "Audit log",                super_admin: "✓",    venue_manager: "Scoped", finance: "✓",     marketing: "View",  viewer: "—" },
+  { area: "Financial reports",        super_admin: "✓",    venue_manager: "—",      finance: "✓",     marketing: "View",  viewer: "—" },
+];
+
+function AdminUsersTab({ members }) {
+  const [admins, setAdmins] = useState([]);
+  const [stores, setStores] = useState([]);
+  const [auditLog, setAuditLog] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeView, setActiveView] = useState("users"); // 'users' | 'permissions' | 'audit' | 'staff'
+  const [inviteModal, setInviteModal] = useState(null);
+  const [currentAdminId, setCurrentAdminId] = useState(null);
+  const [auditFilter, setAuditFilter] = useState({ entityType: "all", action: "all", adminId: "all" });
+
+  const staff = members.filter(m => m.tier === "staff");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [ad, st, al] = await Promise.all([
+        supaFetch("admin_users?order=role.asc"),
+        supaFetch("stores?select=id,name&order=name.asc"),
+        supaFetch("audit_log?order=created_at.desc&limit=100"),
+      ]);
+      if (Array.isArray(ad)) {
+        setAdmins(ad);
+        const sa = ad.find(a => a.role === "super_admin");
+        if (sa) setCurrentAdminId(sa.id);
+      }
+      if (Array.isArray(st)) setStores(st);
+      if (Array.isArray(al)) setAuditLog(al);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]); // eslint-disable-line react-hooks/set-state-in-effect
+
+  const logAudit = async (entityType, entityId, action, before, after, reason) => {
+    if (!currentAdminId) return;
+    try {
+      await supaFetch("audit_log", {
+        method: "POST",
+        body: {
+          admin_user_id: currentAdminId,
+          entity_type: entityType,
+          entity_id: String(entityId),
+          action, before_value: before, after_value: after, reason,
+        },
+      });
+    } catch (e) { console.error("Audit log failed:", e); }
+  };
+
+  const inviteAdmin = async () => {
+    if (!inviteModal) return;
+    const { name, email, role, venue_scope } = inviteModal;
+    if (!name?.trim()) { alert("Name is required"); return; }
+    if (!email?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { alert("Valid email is required"); return; }
+    if (admins.some(a => a.email.toLowerCase() === email.toLowerCase())) { alert(`An admin with email '${email}' already exists`); return; }
+
+    const body = {
+      name, email, role,
+      venue_scope: venue_scope || [],
+      status: "active",
+      invited_by: currentAdminId || null,
+    };
+    const r = await supaFetch("admin_users", { method: "POST", body });
+    if (Array.isArray(r) && r[0]) {
+      await logAudit("admin_user", r[0].id, "create", null, r[0], `Invited as ${ROLE_LABELS[role]}`);
+    }
+    setInviteModal(null);
+    load();
+  };
+
+  const toggleAdminStatus = async (admin) => {
+    const newStatus = admin.status === "active" ? "inactive" : "active";
+    const verb = newStatus === "inactive" ? "Deactivate" : "Reactivate";
+    if (!window.confirm(`${verb} ${admin.name}?\n\nThey will ${newStatus === "inactive" ? "no longer be able to sign in or be attributed to new actions" : "regain access"}.\n\nAudit history is preserved.`)) return;
+    await supaFetch(`admin_users?id=eq.${admin.id}`, { method: "PATCH", body: { status: newStatus } });
+    await logAudit("admin_user", admin.id, "update", { status: admin.status }, { status: newStatus }, `Status toggled to ${newStatus}`);
+    load();
+  };
+
+  const removeFromScope = async (admin, storeId) => {
+    const storeName = stores.find(st => st.id === storeId)?.name || storeId;
+    if (!window.confirm(`Revoke ${admin.name}'s access to ${storeName}?`)) return;
+    const current = admin.venue_scope || [];
+    const newScope = current.filter(v => v !== storeId);
+    await supaFetch(`admin_users?id=eq.${admin.id}`, { method: "PATCH", body: { venue_scope: newScope } });
+    await logAudit("admin_user", admin.id, "revoke_venue_access", { venue_scope: current }, { venue_scope: newScope }, `Revoked access to ${storeName}`);
+    load();
+  };
+
+  // ─── Audit filter helpers ───
+  const filteredAudit = auditLog.filter(e => {
+    if (auditFilter.entityType !== "all" && e.entity_type !== auditFilter.entityType) return false;
+    if (auditFilter.action !== "all" && e.action !== auditFilter.action) return false;
+    if (auditFilter.adminId !== "all" && e.admin_user_id !== auditFilter.adminId) return false;
+    return true;
+  });
+
+  const adminName = (id) => admins.find(a => a.id === id)?.name || "Unknown";
+  const uniqueActions = [...new Set(auditLog.map(e => e.action))].sort();
+  const uniqueEntities = [...new Set(auditLog.map(e => e.entity_type))].sort();
+
+  const fmtDateTime = (ts) => {
+    if (!ts) return "";
+    const d = new Date(ts);
+    return d.toLocaleDateString("en-SG", { day: "2-digit", month: "short" }) + " · " + d.toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit", hour12: false });
+  };
+
   return (
     <div style={{ animation: "fadeIn .3s ease" }}>
-      <h2 style={s.h2}>Staff ({staff.length})</h2>
-      <div style={s.bannerAmber}><span>⚠️</span><div><strong>Dual-Account:</strong> One mobile = one account. Staff must use alternate number.</div></div>
-      {staff.length > 0 ? staff.map(m => (
-        <div key={m.id} style={{ ...s.card, display: "flex", alignItems: "center", gap: 16 }}>
-          <div style={{ width: 36, height: 36, borderRadius: "50%", background: TIER.staff.grad, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 600 }}>{(m.name||"S")[0]}</div>
-          <div style={{ flex: 1 }}><div style={{ fontWeight: 600 }}>{m.name}</div><div style={{ ...s.mono, color: C.muted }}>{m.id} · {m.mobile}</div></div>
-          <span style={s.badge("staff")}>Staff</span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={{ ...s.h2, marginBottom: 0 }}>Admin Users & Permissions</h2>
+        {activeView === "users" && <button onClick={() => setInviteModal({ name: "", email: "", role: "viewer", venue_scope: [] })} style={s.btn}>+ Invite Admin</button>}
+      </div>
+
+      {/* Sub-nav */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "1px solid #eee" }}>
+        {[
+          { id: "users",       label: `Admins (${admins.length})` },
+          { id: "permissions", label: "Permissions Matrix" },
+          { id: "audit",       label: `Audit Log (${auditLog.length})` },
+          { id: "staff",       label: `Staff Tier (${staff.length})` },
+        ].map(v => (
+          <div key={v.id} onClick={() => setActiveView(v.id)}
+            style={{ padding: "10px 16px", fontSize: 12.5, fontWeight: activeView === v.id ? 600 : 400, color: activeView === v.id ? C.gold : C.muted, borderBottom: activeView === v.id ? "2px solid " + C.gold : "2px solid transparent", cursor: "pointer", marginBottom: -1 }}>
+            {v.label}
+          </div>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ display: "flex", justifyContent: "center", padding: 40 }}><Spinner /></div>
+      ) : (
+        <>
+          {/* ─── VIEW: Admin users table ─── */}
+          {activeView === "users" && (
+            <>
+              <div style={s.bannerGreen}>
+                <span>✅</span>
+                <div>
+                  <strong>5 demo admins seeded.</strong> Permissions apply platform-wide except for Venue Managers whose access is scoped to the stores in their <code style={s.mono}>venue_scope</code> array (see U23 Stores → Grant Admin Access).
+                </div>
+              </div>
+
+              <div style={s.card}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 900 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: C.lmuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+                        <th style={{ padding: "10px 8px" }}>Name</th>
+                        <th style={{ padding: "10px 8px" }}>Email</th>
+                        <th style={{ padding: "10px 8px" }}>Role</th>
+                        <th style={{ padding: "10px 8px" }}>Venue Scope</th>
+                        <th style={{ padding: "10px 8px" }}>Status</th>
+                        <th style={{ padding: "10px 8px" }}>Last Active</th>
+                        <th style={{ padding: "10px 8px" }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {admins.map(a => {
+                        const roleColour = ROLE_COLORS[a.role] || { bg: "#eee", fg: "#666" };
+                        const scope = a.venue_scope || [];
+                        return (
+                          <tr key={a.id} style={{ borderTop: "1px solid #eee" }}>
+                            <td style={{ padding: "10px 8px", fontWeight: 500 }}>
+                              {a.name}
+                              {a.id === currentAdminId && <span style={{ marginLeft: 6, fontSize: 9.5, padding: "1px 6px", borderRadius: 8, background: C.gold, color: "#fff", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8 }}>You</span>}
+                            </td>
+                            <td style={{ padding: "10px 8px", ...s.mono, fontSize: 11.5, color: C.muted }}>{a.email}</td>
+                            <td style={{ padding: "10px 8px" }}>
+                              <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 10, fontSize: 10.5, fontWeight: 600, background: roleColour.bg, color: roleColour.fg }}>
+                                {ROLE_LABELS[a.role] || a.role}
+                              </span>
+                            </td>
+                            <td style={{ padding: "10px 8px", fontSize: 11 }}>
+                              {scope.length === 0 ? (
+                                <span style={{ color: C.lmuted }}>{a.role === "venue_manager" ? "— (unscoped)" : "All venues"}</span>
+                              ) : scope.map(storeId => {
+                                const storeName = stores.find(st => st.id === storeId)?.name || storeId;
+                                return (
+                                  <span key={storeId} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#f5f5f5", borderRadius: 10, padding: "2px 8px", marginRight: 3, marginBottom: 2, fontSize: 10.5 }}>
+                                    <span>{storeName}</span>
+                                    <span onClick={() => removeFromScope(a, storeId)} style={{ cursor: "pointer", color: "#D32F2F", fontWeight: 700 }} title="Revoke access">×</span>
+                                  </span>
+                                );
+                              })}
+                            </td>
+                            <td style={{ padding: "10px 8px" }}>
+                              <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 10, fontSize: 10.5, fontWeight: 600, background: a.status === "active" ? "#E8F5E9" : "#FFEBEE", color: a.status === "active" ? "#2E7D32" : "#B71C1C" }}>
+                                {a.status}
+                              </span>
+                            </td>
+                            <td style={{ padding: "10px 8px", fontSize: 11, color: C.muted }}>{a.last_active_at ? fmtDateTime(a.last_active_at) : "—"}</td>
+                            <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
+                              <button onClick={() => toggleAdminStatus(a)} style={a.status === "active" ? s.btnDanger : s.btnSuccess}>
+                                {a.status === "active" ? "Deactivate" : "Reactivate"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ─── VIEW: Permissions matrix (read-only reference) ─── */}
+          {activeView === "permissions" && (
+            <>
+              <div style={s.bannerAmber}>
+                <span>⚠️</span>
+                <div>
+                  <strong>Reference only.</strong> This matrix documents what each role is permitted to do in the dashboard. Actual enforcement lives in Supabase Row Level Security and UI gating — to change what a role can do, change both.
+                </div>
+              </div>
+
+              <div style={s.card}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: C.lmuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+                        <th style={{ padding: "10px 8px", textAlign: "left" }}>Area</th>
+                        {Object.keys(ROLE_LABELS).map(r => (
+                          <th key={r} style={{ padding: "10px 8px", textAlign: "center" }}>{ROLE_LABELS[r]}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {PERMISSIONS_MATRIX.map((row, i) => (
+                        <tr key={i} style={{ borderTop: "1px solid #eee" }}>
+                          <td style={{ padding: "10px 8px", fontWeight: 500 }}>{row.area}</td>
+                          {Object.keys(ROLE_LABELS).map(r => {
+                            const val = row[r];
+                            const colour = val === "✓" ? "#2E7D32" : val === "Scoped" ? "#C5A258" : val === "View" ? "#888" : "#ccc";
+                            const weight = val === "—" ? 400 : 600;
+                            return (
+                              <td key={r} style={{ padding: "10px 8px", textAlign: "center", color: colour, fontWeight: weight, fontSize: 12 }}>{val}</td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ display: "flex", gap: 20, marginTop: 16, paddingTop: 16, borderTop: "1px solid #eee", fontSize: 11, color: C.muted, flexWrap: "wrap" }}>
+                  <span><strong style={{ color: "#2E7D32" }}>✓</strong> Full access</span>
+                  <span><strong style={{ color: "#C5A258" }}>Scoped</strong> Access limited to assigned venues</span>
+                  <span><strong style={{ color: "#888" }}>View</strong> Read-only</span>
+                  <span><strong style={{ color: "#ccc" }}>—</strong> No access</span>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ─── VIEW: Audit log ─── */}
+          {activeView === "audit" && (
+            <>
+              <div style={s.bannerGreen}>
+                <span>✅</span>
+                <div>
+                  <strong>Full platform audit trail.</strong> Every admin-side mutation (create/update/delete on members, stores, vouchers, tiers, promotions, admin users) is recorded here with before/after values. Immutable — deletions are soft only.
+                </div>
+              </div>
+
+              <div style={{ ...s.card, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1.2 }}>Filters</span>
+                <select value={auditFilter.entityType} onChange={(e) => setAuditFilter({ ...auditFilter, entityType: e.target.value })} style={{ ...s.input, width: "auto", padding: "8px 12px" }}>
+                  <option value="all">All entities</option>
+                  {uniqueEntities.map(e => <option key={e} value={e}>{e}</option>)}
+                </select>
+                <select value={auditFilter.action} onChange={(e) => setAuditFilter({ ...auditFilter, action: e.target.value })} style={{ ...s.input, width: "auto", padding: "8px 12px" }}>
+                  <option value="all">All actions</option>
+                  {uniqueActions.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+                <select value={auditFilter.adminId} onChange={(e) => setAuditFilter({ ...auditFilter, adminId: e.target.value })} style={{ ...s.input, width: "auto", padding: "8px 12px" }}>
+                  <option value="all">All admins</option>
+                  {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+                <div style={{ marginLeft: "auto", fontSize: 11, color: C.muted }}>{filteredAudit.length} of {auditLog.length} shown</div>
+              </div>
+
+              <div style={s.card}>
+                {filteredAudit.length === 0 ? (
+                  <div style={{ padding: 40, textAlign: "center", color: C.lmuted, fontSize: 13 }}>
+                    {auditLog.length === 0
+                      ? "No audit entries yet. Mutations on stores, members, vouchers, tiers, promotions, or admin users will appear here."
+                      : "No entries match the current filters."}
+                  </div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 900 }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", color: C.lmuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+                          <th style={{ padding: "10px 8px" }}>When</th>
+                          <th style={{ padding: "10px 8px" }}>Admin</th>
+                          <th style={{ padding: "10px 8px" }}>Entity</th>
+                          <th style={{ padding: "10px 8px" }}>Action</th>
+                          <th style={{ padding: "10px 8px" }}>ID</th>
+                          <th style={{ padding: "10px 8px" }}>Change Summary</th>
+                          <th style={{ padding: "10px 8px" }}>Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAudit.map(e => {
+                          const before = e.before_value || {};
+                          const after = e.after_value || {};
+                          const beforeKeys = Object.keys(before);
+                          const afterKeys = Object.keys(after);
+                          const allKeys = [...new Set([...beforeKeys, ...afterKeys])];
+                          const diffKeys = allKeys.filter(k => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
+                          const summary = e.action === "create" ? `Created (${afterKeys.length} fields)` :
+                                          e.action === "delete" ? `Deleted` :
+                                          diffKeys.length === 0 ? "—" :
+                                          diffKeys.slice(0, 3).join(", ") + (diffKeys.length > 3 ? ` +${diffKeys.length - 3} more` : "");
+                          return (
+                            <tr key={e.id} style={{ borderTop: "1px solid #eee" }}>
+                              <td style={{ padding: "8px", fontSize: 11, color: C.muted, whiteSpace: "nowrap" }}>{fmtDateTime(e.created_at)}</td>
+                              <td style={{ padding: "8px", fontSize: 11.5 }}>{e.admin_user_id ? adminName(e.admin_user_id) : <span style={{ color: C.lmuted }}>system</span>}</td>
+                              <td style={{ padding: "8px", fontSize: 11.5 }}>
+                                <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 8, fontSize: 10, fontWeight: 600, background: "#f5f5f5", color: C.text }}>
+                                  {e.entity_type}
+                                </span>
+                              </td>
+                              <td style={{ padding: "8px", ...s.mono, fontSize: 10.5 }}>{e.action}</td>
+                              <td style={{ padding: "8px", ...s.mono, fontSize: 10.5, color: C.muted }}>{e.entity_id}</td>
+                              <td style={{ padding: "8px", fontSize: 11.5, color: C.muted, maxWidth: 260 }}>{summary}</td>
+                              <td style={{ padding: "8px", fontSize: 11, color: C.muted, fontStyle: e.reason ? "normal" : "italic" }}>{e.reason || "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* ─── VIEW: Staff tier members (preserved from old StaffTab) ─── */}
+          {activeView === "staff" && (
+            <>
+              <div style={s.bannerAmber}>
+                <span>⚠️</span>
+                <div>
+                  <strong>Dual-Account SOP:</strong> One mobile = one account (Eber restriction). Staff with a personal 1-Insider account must use an alternate mobile number for their Staff tier account.
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 12, fontSize: 13, color: C.muted }}>
+                <strong style={{ color: C.text }}>Staff tier is distinct from admin access.</strong> Admin users (above) sign into the Admin Dashboard. Staff tier members are loyalty members who happen to be 1-Group employees — they sign into the Member Portal like any other member.
+              </div>
+
+              {staff.length > 0 ? staff.map(m => (
+                <div key={m.id} style={{ ...s.card, display: "flex", alignItems: "center", gap: 16 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: "50%", background: TIER.staff.grad, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 600 }}>{(m.name || "S")[0]}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600 }}>{m.name}</div>
+                    <div style={{ ...s.mono, color: C.muted, fontSize: 11 }}>{m.id} · {m.mobile}</div>
+                  </div>
+                  <span style={s.badge("staff")}>Staff</span>
+                </div>
+              )) : (
+                <div style={{ ...s.card, padding: 40, textAlign: "center", color: C.lmuted }}>No staff tier members yet.</div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {/* ─── Invite Admin modal ─── */}
+      {inviteModal && (
+        <div style={s.modal} onClick={() => setInviteModal(null)}>
+          <div style={{ ...s.modalInner, maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+            <div style={s.h3}>Invite Admin</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>
+              In production this would trigger a signup email. For now the admin is created immediately in Supabase and can be granted access via the Stores tab.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Name</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={inviteModal.name} onChange={(e) => setInviteModal({ ...inviteModal, name: e.target.value })} placeholder="Full name" />
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Email</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={inviteModal.email} onChange={(e) => setInviteModal({ ...inviteModal, email: e.target.value })} placeholder="person@1-group.sg" type="email" />
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Role</label>
+                <select style={{ ...s.input, marginTop: 4 }} value={inviteModal.role} onChange={(e) => setInviteModal({ ...inviteModal, role: e.target.value, venue_scope: e.target.value === "venue_manager" ? inviteModal.venue_scope : [] })}>
+                  {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+              {inviteModal.role === "venue_manager" && (
+                <div style={{ gridColumn: "span 2" }}>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Venue scope (venue managers only)</label>
+                  <div style={{ marginTop: 6, maxHeight: 160, overflowY: "auto", border: "1px solid #ddd", borderRadius: 8, padding: 8 }}>
+                    {stores.map(st => (
+                      <label key={st.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", fontSize: 12, cursor: "pointer" }}>
+                        <input type="checkbox"
+                          checked={(inviteModal.venue_scope || []).includes(st.id)}
+                          onChange={(e) => {
+                            const cur = inviteModal.venue_scope || [];
+                            const next = e.target.checked ? [...cur, st.id] : cur.filter(v => v !== st.id);
+                            setInviteModal({ ...inviteModal, venue_scope: next });
+                          }} />
+                        {st.name}
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: C.lmuted, marginTop: 4 }}>Leave empty for unscoped (not recommended for venue managers).</div>
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setInviteModal(null)} style={{ ...s.btnSm, background: "#eee", color: "#555" }}>Cancel</button>
+              <button onClick={inviteAdmin} style={s.btn}>Invite</button>
+            </div>
+          </div>
         </div>
-      )) : <div style={{ color: C.muted }}>No staff members yet</div>}
+      )}
     </div>
   );
 }
