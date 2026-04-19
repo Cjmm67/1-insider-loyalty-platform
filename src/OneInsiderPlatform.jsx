@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 
 const SUPA_URL = "https://tobtmtshxgpkkucsaxyk.supabase.co";
 const SUPA_KEY = "sb_publishable_M_yQLmU_5yc0yTccm4F_oA_xWKyTqx9";
@@ -231,10 +231,233 @@ function Overview({ members, transactions, campaigns }) {
           </div>
         </div>
       </div>
+
+      {/* U15: Redemptions by Venue */}
+      <RedemptionsByVenue />
+
       <h3 style={s.h3}>Eber Platform Status</h3>
       {LIMITATIONS.filter(l => l.sev==="high").map((l,i) => <div key={i} style={s.bannerRed}><span>🚫</span><div><strong>{l.id}:</strong> {l.text}<br /><span style={{ color: "#666", fontSize: 11 }}>Workaround: {l.fix}</span></div></div>)}
       <div style={s.bannerGreen}><span>✅</span><div><strong>Active:</strong> Gmail MCP renewals, AI Voucher Tracker, Time-based stamp restriction, Per-promotion checklists</div></div>
       <div style={s.bannerAmber}><span>⚠️</span><div><strong>Demo Mode:</strong> Stamp depletion and voucher usage managed via Admin Dashboard until Agilysys/SevenRooms POS integration is live.</div></div>
+    </div>
+  );
+}
+
+// ─── U15 REDEMPTIONS BY VENUE ───
+function RedemptionsByVenue() {
+  const [txns, setTxns] = useState([]);
+  const [stores, setStores] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [dateRange, setDateRange] = useState("30"); // "7" | "30" | "90" | "ytd" | "all"
+  const [metric, setMetric] = useState("count"); // "count" | "value"
+  const [sortKey, setSortKey] = useState("value"); // for the table
+  const [sortDir, setSortDir] = useState("desc");
+  const [includePseudo, setIncludePseudo] = useState(false); // "1-Insider Vouchers" etc.
+
+  // Compute cutoff date for server-side filter
+  const cutoffIso = (() => {
+    if (dateRange === "all") return null;
+    const now = new Date();
+    if (dateRange === "ytd") return new Date(now.getFullYear(), 0, 1).toISOString();
+    const days = parseInt(dateRange, 10);
+    const d = new Date(now);
+    d.setDate(d.getDate() - days);
+    return d.toISOString();
+  })();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      let path = "transactions?type=eq.redeem&order=created_at.desc";
+      if (cutoffIso) path += `&created_at=gte.${cutoffIso}`;
+      const [t, st] = await Promise.all([
+        supaFetch(path),
+        supaFetch("stores?select=id,name,category&order=name.asc"),
+      ]);
+      if (Array.isArray(t)) setTxns(t);
+      if (Array.isArray(st)) setStores(st);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, [cutoffIso]);
+
+  useEffect(() => { load(); }, [load]); // eslint-disable-line react-hooks/set-state-in-effect
+
+  // Resolve venue label for each transaction — prefer store lookup by venue_id, fallback to string
+  const storeById = Object.fromEntries(stores.map(st => [st.id, st.name]));
+  const PSEUDO_VENUES = new Set(["1-Insider Vouchers", "1-Insider Rewards", "1-Insider Points"]);
+
+  const aggregated = (() => {
+    const bucket = {};
+    for (const t of txns) {
+      const label = (t.venue_id && storeById[t.venue_id]) || t.venue || "Unknown";
+      if (!includePseudo && PSEUDO_VENUES.has(label)) continue;
+      if (!bucket[label]) bucket[label] = { venue: label, count: 0, value: 0, points: 0 };
+      bucket[label].count += 1;
+      bucket[label].value += parseFloat(t.amount || 0);
+      bucket[label].points += Math.abs(parseInt(t.points || 0, 10));
+    }
+    return Object.values(bucket);
+  })();
+
+  // Sort for table
+  const sortedTable = [...aggregated].sort((a, b) => {
+    const av = a[sortKey] ?? 0;
+    const bv = b[sortKey] ?? 0;
+    if (typeof av === "string") return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortDir === "asc" ? av - bv : bv - av;
+  });
+
+  // Top 10 for chart — sort by the active metric
+  const chartData = [...aggregated].sort((a, b) => (b[metric] || 0) - (a[metric] || 0)).slice(0, 10);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir("desc"); }
+  };
+
+  const sortIndicator = (key) => sortKey === key ? (sortDir === "desc" ? " ▼" : " ▲") : "";
+
+  const exportCSV = () => {
+    const header = ["Venue", "Redemption Count", "Total Value (SGD)", "Points Redeemed"];
+    const rows = sortedTable.map(r => [r.venue, r.count, r.value.toFixed(2), r.points]);
+    const csv = [header, ...rows].map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `redemptions-by-venue-${dateRange}-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Totals for summary
+  const totalCount = aggregated.reduce((a, r) => a + r.count, 0);
+  const totalValue = aggregated.reduce((a, r) => a + r.value, 0);
+  const venueCount = aggregated.length;
+
+  const fmtCurrency = (n) => "$" + n.toLocaleString("en-SG", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ ...s.card, marginBottom: 0 }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+          <h3 style={{ ...s.h3, margin: 0 }}>Redemptions by Venue</h3>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Date range */}
+            <div style={{ display: "flex", gap: 1, background: "#f5f5f5", borderRadius: 8, padding: 2 }}>
+              {[
+                { id: "7",   label: "7d" },
+                { id: "30",  label: "30d" },
+                { id: "90",  label: "90d" },
+                { id: "ytd", label: "YTD" },
+                { id: "all", label: "All" },
+              ].map(opt => (
+                <button key={opt.id} onClick={() => setDateRange(opt.id)}
+                  style={{ padding: "6px 12px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, cursor: "pointer",
+                           background: dateRange === opt.id ? "#fff" : "transparent",
+                           color: dateRange === opt.id ? C.gold : C.muted,
+                           boxShadow: dateRange === opt.id ? "0 1px 3px rgba(0,0,0,.08)" : "none" }}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {/* Metric toggle */}
+            <div style={{ display: "flex", gap: 1, background: "#f5f5f5", borderRadius: 8, padding: 2 }}>
+              {[{ id: "count", label: "By Count" }, { id: "value", label: "By Value" }].map(opt => (
+                <button key={opt.id} onClick={() => setMetric(opt.id)}
+                  style={{ padding: "6px 12px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, cursor: "pointer",
+                           background: metric === opt.id ? "#fff" : "transparent",
+                           color: metric === opt.id ? C.gold : C.muted,
+                           boxShadow: metric === opt.id ? "0 1px 3px rgba(0,0,0,.08)" : "none" }}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <button onClick={exportCSV} style={{ ...s.btnSm, background: "#555" }} disabled={aggregated.length === 0}>⇣ CSV</button>
+          </div>
+        </div>
+
+        {/* Summary line */}
+        <div style={{ display: "flex", gap: 24, marginBottom: 16, fontSize: 12, color: C.muted, flexWrap: "wrap" }}>
+          <div><strong style={{ color: C.text, ...s.kpiVal, fontSize: 18 }}>{totalCount.toLocaleString()}</strong><span style={{ marginLeft: 6 }}>redemptions</span></div>
+          <div><strong style={{ color: C.text, ...s.kpiVal, fontSize: 18 }}>{fmtCurrency(totalValue)}</strong><span style={{ marginLeft: 6 }}>value</span></div>
+          <div><strong style={{ color: C.text, ...s.kpiVal, fontSize: 18 }}>{venueCount}</strong><span style={{ marginLeft: 6 }}>venues</span></div>
+          <label style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, fontSize: 11, cursor: "pointer" }}>
+            <input type="checkbox" checked={includePseudo} onChange={e => setIncludePseudo(e.target.checked)} />
+            Include issuance pseudo-venues (1-Insider Vouchers / Rewards)
+          </label>
+        </div>
+
+        {/* Historical data reality banner */}
+        <div style={{ ...s.bannerAmber, marginBottom: 16 }}>
+          <span>ℹ️</span>
+          <div>
+            <strong>Venue attribution reality:</strong> current redemption transactions carry a free-text <code style={s.mono}>venue</code> string, not a structured <code style={s.mono}>venue_id</code>.
+            Post-U10 (QR voucher redemption) and post-U04/U12 (portal venue links), redemptions will link to the <code style={s.mono}>stores</code> table directly and this widget will become outlet-accurate. Today it reflects what Phase 1 wrote.
+          </div>
+        </div>
+
+        {loading ? (
+          <div style={{ display: "flex", justifyContent: "center", padding: 40 }}><Spinner /></div>
+        ) : aggregated.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: C.lmuted, fontSize: 13 }}>
+            No redemptions in this window. Try a wider date range or enable pseudo-venues.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 16 }}>
+            {/* Left: bar chart — top 10 */}
+            <div>
+              <div style={{ fontSize: 11, color: C.lmuted, textTransform: "uppercase", letterSpacing: 1.2, fontWeight: 600, marginBottom: 8 }}>
+                Top {Math.min(10, chartData.length)} by {metric === "count" ? "Redemption Count" : "Total Value"}
+              </div>
+              <ResponsiveContainer width="100%" height={Math.max(240, chartData.length * 32)}>
+                <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#eee" horizontal={false} />
+                  <XAxis type="number" stroke="#999" style={{ fontSize: 10 }} tickFormatter={(v) => metric === "value" ? fmtCurrency(v) : v} />
+                  <YAxis type="category" dataKey="venue" stroke="#999" style={{ fontSize: 10 }} width={140} />
+                  <Tooltip
+                    formatter={(value) => [metric === "value" ? fmtCurrency(value) : value.toLocaleString(), metric === "count" ? "Redemptions" : "Value"]}
+                    contentStyle={{ borderRadius: 8, border: "1px solid #ddd", fontSize: 12 }}
+                  />
+                  <Bar dataKey={metric} fill={C.gold} radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Right: sortable table — all venues */}
+            <div style={{ maxHeight: Math.max(240, chartData.length * 32) + 40, overflowY: "auto", border: "1px solid #eee", borderRadius: 8 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead style={{ position: "sticky", top: 0, background: "#fafafa", zIndex: 1 }}>
+                  <tr style={{ textAlign: "left", color: C.lmuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+                    <th onClick={() => toggleSort("venue")} style={{ padding: "10px 8px", cursor: "pointer", borderBottom: "1px solid #eee" }}>
+                      Venue{sortIndicator("venue")}
+                    </th>
+                    <th onClick={() => toggleSort("count")} style={{ padding: "10px 8px", cursor: "pointer", textAlign: "right", borderBottom: "1px solid #eee" }}>
+                      Count{sortIndicator("count")}
+                    </th>
+                    <th onClick={() => toggleSort("value")} style={{ padding: "10px 8px", cursor: "pointer", textAlign: "right", borderBottom: "1px solid #eee" }}>
+                      Value{sortIndicator("value")}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedTable.map((r, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #f5f5f5" }}>
+                      <td style={{ padding: "8px", fontWeight: 500 }}>
+                        {PSEUDO_VENUES.has(r.venue) && <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 6, background: "#EDE7F6", color: "#4527A0", marginRight: 4, textTransform: "uppercase", letterSpacing: 0.8 }}>sys</span>}
+                        {r.venue}
+                      </td>
+                      <td style={{ padding: "8px", textAlign: "right", fontWeight: 600 }}>{r.count}</td>
+                      <td style={{ padding: "8px", textAlign: "right", ...s.mono, color: r.value > 0 ? C.text : C.lmuted }}>{r.value > 0 ? fmtCurrency(r.value) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
