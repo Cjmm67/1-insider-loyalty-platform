@@ -1355,32 +1355,526 @@ function TiersTab({ members }) {
   );
 }
 
-// ─── PROMOTIONS ───
+// ─── U21 PROMOTIONS ───
 function Promotions({ campaigns }) {
-  const [aiResult, setAiResult] = useState(""); const [aiLoading, setAiLoading] = useState(false); const [prompt, setPrompt] = useState("");
+  // AI assistant state (preserved from Phase 1)
+  const [aiResult, setAiResult] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [prompt, setPrompt] = useState("");
+
+  // U21 state
+  const [promotions, setPromotions] = useState([]);
+  const [stores, setStores] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeView, setActiveView] = useState("active"); // 'active' | 'upcoming' | 'completed' | 'create'
+  const [currentAdminId, setCurrentAdminId] = useState(null);
+  const [inProgress, setInProgress] = useState(false);
+
+  const blankDraft = () => ({
+    name: "",
+    description: "",
+    start_date: "",
+    end_date: "",
+    venues: [],
+    tiers: ["silver","gold","platinum","corporate"],
+    mechanic_type: "double_points",
+    mechanic_config: { multiplier: 2, cap: 500, bonus_points: 100, min_spend: 50, comp_item: "", discount_pct: 10 },
+    excluded_items: [],
+    checklist_ack: { eber_points: false, eber_stamps: false, calendar_set: false, no_overlap: false, documented: false },
+  });
+  const [draft, setDraft] = useState(blankDraft());
+  const [newExclusion, setNewExclusion] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [pr, st, ad] = await Promise.all([
+        supaFetch("promotions?order=start_date.desc"),
+        supaFetch("stores?select=id,name,category,status&order=name.asc"),
+        supaFetch("admin_users?role=eq.super_admin&limit=1"),
+      ]);
+      if (Array.isArray(pr)) setPromotions(pr);
+      if (Array.isArray(st)) setStores(st);
+      if (Array.isArray(ad) && ad[0]) setCurrentAdminId(ad[0].id);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]); // eslint-disable-line react-hooks/set-state-in-effect
+
+  const logAudit = async (promotionId, action, before, after, reason) => {
+    if (!currentAdminId) return;
+    try {
+      await supaFetch("audit_log", {
+        method: "POST",
+        body: {
+          admin_user_id: currentAdminId,
+          entity_type: "promotion",
+          entity_id: String(promotionId),
+          action, before_value: before, after_value: after, reason,
+        },
+      });
+    } catch (e) { console.error("Audit log failed:", e); }
+  };
+
+  // Filter promotions by status derived from dates + status
+  const today = new Date().toISOString().slice(0, 10);
+  const active = promotions.filter(p => p.status === "active" && p.start_date <= today && p.end_date >= today);
+  const upcoming = promotions.filter(p => (p.status === "draft" || p.status === "active") && p.start_date > today);
+  const completed = promotions.filter(p => p.status === "completed" || (p.status !== "cancelled" && p.end_date < today));
+
+  const visible = activeView === "active" ? active : activeView === "upcoming" ? upcoming : activeView === "completed" ? completed : [];
+
+  // Auto-compute revert reminder as end_date + 1
+  const computeRevertDate = (endDate) => {
+    if (!endDate) return null;
+    const d = new Date(endDate);
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const daysBetween = (d1, d2) => {
+    const ms = new Date(d2).getTime() - new Date(d1).getTime();
+    return Math.round(ms / 86400000);
+  };
+
+  const savePromotion = async () => {
+    // Validation
+    if (!draft.name?.trim()) { alert("Name is required"); return; }
+    if (!draft.start_date || !draft.end_date) { alert("Start and end dates are required"); return; }
+    if (draft.end_date < draft.start_date) { alert("End date must be on or after start date"); return; }
+    if (draft.start_date < today) { alert("Start date cannot be in the past"); return; }
+    if (draft.venues.length === 0) { alert("At least one venue must be selected"); return; }
+    if (draft.tiers.length === 0) { alert("At least one tier must be selected"); return; }
+    const unchecked = Object.entries(draft.checklist_ack).filter(([, v]) => !v).map(([k]) => k);
+    if (unchecked.length > 0) { alert(`Per-promotion checklist is incomplete. ${unchecked.length} item(s) remaining.`); return; }
+
+    // Overlap warning (soft)
+    const overlap = promotions.find(p => p.status !== "cancelled" && p.status !== "completed" &&
+      draft.venues.some(v => (p.venues || []).includes(v)) &&
+      !(draft.end_date < p.start_date || draft.start_date > p.end_date));
+    if (overlap) {
+      if (!window.confirm(`⚠️ Overlapping promotion detected:\n\n"${overlap.name}" (${overlap.start_date} → ${overlap.end_date}) covers some of the same venues in the same date range.\n\nSave anyway?`)) return;
+    }
+
+    setInProgress(true);
+    try {
+      const body = {
+        name: draft.name.trim(),
+        description: draft.description?.trim() || null,
+        start_date: draft.start_date,
+        end_date: draft.end_date,
+        venues: draft.venues,
+        tiers: draft.tiers,
+        mechanic_type: draft.mechanic_type,
+        mechanic_config: draft.mechanic_config,
+        excluded_items: draft.excluded_items,
+        revert_reminder_date: computeRevertDate(draft.end_date),
+        checklist_ack: draft.checklist_ack,
+        status: draft.start_date <= today ? "active" : "draft",
+        created_by: currentAdminId,
+      };
+      const r = await supaFetch("promotions", { method: "POST", body });
+      if (Array.isArray(r) && r[0]) {
+        await logAudit(r[0].id, "create", null, r[0], `Created with ${draft.excluded_items.length} exclusion${draft.excluded_items.length === 1 ? "" : "s"}`);
+      }
+      setDraft(blankDraft());
+      setActiveView(draft.start_date <= today ? "active" : "upcoming");
+      load();
+    } catch (e) {
+      console.error("Save promotion failed:", e);
+      alert("Save failed. Check console.");
+    }
+    setInProgress(false);
+  };
+
+  const cancelPromotion = async (p) => {
+    const reason = window.prompt(`Cancel "${p.name}"?\n\nThis sets status=cancelled and preserves the record. Enter reason:`);
+    if (!reason) return;
+    await supaFetch(`promotions?id=eq.${p.id}`, { method: "PATCH", body: { status: "cancelled" } });
+    await logAudit(p.id, "cancel", { status: p.status }, { status: "cancelled" }, reason);
+    load();
+  };
+
+  const activateDraft = async (p) => {
+    if (!window.confirm(`Activate "${p.name}" now?\n\nThis sets status=active. Remember to have Eber backend rules updated first.`)) return;
+    await supaFetch(`promotions?id=eq.${p.id}`, { method: "PATCH", body: { status: "active" } });
+    await logAudit(p.id, "activate", { status: p.status }, { status: "active" }, "Admin activation");
+    load();
+  };
+
+  // Generate .ics calendar event string for revert reminder
+  const generateICS = (p) => {
+    const revertDate = p.revert_reminder_date || computeRevertDate(p.end_date);
+    if (!revertDate) return "";
+    const formatDate = (d) => d.replace(/-/g, "") + "T090000";
+    const uid = `promo-revert-${p.id}@1-insider`;
+    const ics = [
+      "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//1-Insider//Promotion Revert//EN",
+      "BEGIN:VEVENT",
+      `UID:${uid}`,
+      `DTSTART:${formatDate(revertDate)}`,
+      `DTEND:${formatDate(revertDate)}`,
+      `SUMMARY:REVERT Eber rules: ${p.name}`,
+      `DESCRIPTION:Promotion "${p.name}" ended ${p.end_date}. Manual Eber rule revert required per L04. Excluded items: ${(p.excluded_items || []).join(", ") || "none"}`,
+      "END:VEVENT", "END:VCALENDAR",
+    ].join("\r\n");
+    return ics;
+  };
+
+  const downloadICS = (p) => {
+    const blob = new Blob([generateICS(p)], { type: "text/calendar;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `promo-revert-${p.name.replace(/\W/g, "-").toLowerCase()}.ics`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const checklistComplete = Object.values(draft.checklist_ack).every(Boolean);
+
+  // ── Helper: promotion card ──
+  const PromotionCard = ({ p }) => {
+    const daysUntilRevert = p.revert_reminder_date ? daysBetween(today, p.revert_reminder_date) : null;
+    const isActive = p.status === "active";
+    const isDraft = p.status === "draft";
+    const statusColour = {
+      active: { bg: "#E8F5E9", fg: "#2E7D32" },
+      draft: { bg: "#FFF8E1", fg: "#5D4037" },
+      completed: { bg: "#E3F2FD", fg: "#1565C0" },
+      cancelled: { bg: "#F7F7F7", fg: "#666" },
+    }[p.status] || { bg: "#eee", fg: "#666" };
+
+    return (
+      <div style={{ ...s.card, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 8 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: FONT.h, fontSize: 16, fontWeight: 600 }}>{p.name}</div>
+            {p.description && <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{p.description}</div>}
+          </div>
+          <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 10, fontSize: 10.5, fontWeight: 600, background: statusColour.bg, color: statusColour.fg, whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: 0.8 }}>
+            {p.status}
+          </span>
+        </div>
+
+        <div style={{ display: "flex", gap: 16, fontSize: 11, color: C.muted, marginBottom: 10, flexWrap: "wrap" }}>
+          <span><strong style={{ color: C.text }}>📅</strong> {p.start_date} → {p.end_date}</span>
+          <span><strong style={{ color: C.text }}>🔧</strong> {(p.mechanic_type || "").replace(/_/g, " ")}</span>
+          <span><strong style={{ color: C.text }}>🏛️</strong> {(p.venues || []).length} venue{(p.venues || []).length === 1 ? "" : "s"}</span>
+          <span><strong style={{ color: C.text }}>👥</strong> {(p.tiers || []).length} tier{(p.tiers || []).length === 1 ? "" : "s"}</span>
+          {(p.excluded_items || []).length > 0 && <span><strong style={{ color: "#B71C1C" }}>🚫</strong> {p.excluded_items.length} excluded item{p.excluded_items.length === 1 ? "" : "s"}</span>}
+        </div>
+
+        {/* Venue chips */}
+        {(p.venues || []).length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            {p.venues.slice(0, 8).map(vId => {
+              const store = stores.find(st => st.id === vId);
+              return (
+                <span key={vId} style={{ display: "inline-block", background: "#f5f5f5", borderRadius: 10, padding: "2px 8px", fontSize: 10.5, marginRight: 4, marginBottom: 3 }}>
+                  {store?.name || vId}
+                </span>
+              );
+            })}
+            {p.venues.length > 8 && <span style={{ fontSize: 10.5, color: C.muted, marginLeft: 4 }}>+{p.venues.length - 8} more</span>}
+          </div>
+        )}
+
+        {/* Exclusions */}
+        {(p.excluded_items || []).length > 0 && (
+          <div style={{ background: "#FFEBEE", border: "1px solid #EF9A9A", borderRadius: 8, padding: 8, marginBottom: 10, fontSize: 11 }}>
+            <div style={{ fontWeight: 600, color: "#B71C1C", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8, fontSize: 9.5 }}>🚫 Excluded from points accrual (Eber L04)</div>
+            <div style={{ color: C.text }}>{p.excluded_items.join(" · ")}</div>
+          </div>
+        )}
+
+        {/* Revert reminder */}
+        {(isActive || isDraft) && p.revert_reminder_date && (
+          <div style={{ ...s.bannerAmber, marginBottom: 10, padding: "10px 12px" }}>
+            <span>⚠️</span>
+            <div style={{ flex: 1 }}>
+              <div><strong>Revert Eber rules on {p.revert_reminder_date}</strong>{daysUntilRevert !== null && daysUntilRevert > 0 && <span style={{ color: C.muted }}> · in {daysUntilRevert} day{daysUntilRevert === 1 ? "" : "s"}</span>}{daysUntilRevert !== null && daysUntilRevert < 0 && <span style={{ color: "#B71C1C", fontWeight: 600 }}> · OVERDUE by {Math.abs(daysUntilRevert)} day{Math.abs(daysUntilRevert) === 1 ? "" : "s"}</span>}</div>
+              <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>Manual backend update required per Eber L04. Download .ics for Calendar/Gmail MCP reminder.</div>
+            </div>
+            <button onClick={() => downloadICS(p)} style={{ ...s.btnSm, padding: "4px 10px", fontSize: 10, background: "#555" }}>⇣ .ics</button>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          {isDraft && <button onClick={() => activateDraft(p)} style={s.btnSuccess}>Activate now</button>}
+          {(isActive || isDraft) && <button onClick={() => cancelPromotion(p)} style={{ ...s.btnSm, background: "#eee", color: "#D32F2F" }}>Cancel</button>}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ animation: "fadeIn .3s ease" }}>
-      <h2 style={s.h2}>Promotions</h2>
-      <div style={s.bannerAmber}><span>⚠️</span><div><strong>CRITICAL:</strong> Eber cannot auto-exclude promo items. Update rules BEFORE every promotion, REVERT after.</div></div>
-      <h3 style={s.h3}>Per-Promotion Checklist</h3>
-      <div style={s.card}>
-        {["Update Eber points rules BEFORE start","Update stamp rules if applicable","Set Calendar reminder to REVERT","Verify no overlapping promotions","Document in calendar"].map((item,i) => (
-          <div key={i} style={{ padding: "6px 0", fontSize: 12.5, borderBottom: "1px solid #f5f5f5" }}>☐ {item}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={{ ...s.h2, marginBottom: 0 }}>Promotions</h2>
+        {activeView !== "create" && <button onClick={() => { setDraft(blankDraft()); setActiveView("create"); }} style={s.btn}>+ New Promotion</button>}
+      </div>
+
+      {/* Always-on Eber L04 banner */}
+      <div style={s.bannerRed}>
+        <span>🚫</span>
+        <div>
+          <strong>Eber L04 — promotional items cannot be auto-excluded from points accrual.</strong> Every promotion here requires a manual Eber backend rule update BEFORE start date, and a REVERT after end date. This page records the intent and surfaces the revert reminder — it does NOT update Eber for you.
+        </div>
+      </div>
+
+      {/* Sub-nav */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "1px solid #eee" }}>
+        {[
+          { id: "active", label: `Active (${active.length})` },
+          { id: "upcoming", label: `Upcoming (${upcoming.length})` },
+          { id: "completed", label: `Completed (${completed.length})` },
+          ...(activeView === "create" ? [{ id: "create", label: "+ Creating new…" }] : []),
+        ].map(v => (
+          <div key={v.id} onClick={() => setActiveView(v.id)}
+            style={{ padding: "10px 16px", fontSize: 12.5, fontWeight: activeView === v.id ? 600 : 400, color: activeView === v.id ? C.gold : C.muted, borderBottom: activeView === v.id ? "2px solid " + C.gold : "2px solid transparent", cursor: "pointer", marginBottom: -1 }}>
+            {v.label}
+          </div>
         ))}
       </div>
-      <h3 style={s.h3}>Campaigns</h3>
-      {campaigns.length > 0 ? campaigns.map((c,i) => (
-        <div key={i} style={{ ...s.card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div><div style={{ fontWeight: 600 }}>{c.name}</div><div style={{ fontSize: 11, color: C.muted }}>{c.type} · {c.start_date} → {c.end_date}</div></div>
-          <span style={s.badge(c.status==="active" ? "gold" : "silver")}>{c.status}</span>
+
+      {/* ─── CREATE VIEW ─── */}
+      {activeView === "create" ? (
+        <div style={s.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <h3 style={{ ...s.h3, margin: 0 }}>New Promotion</h3>
+            <button onClick={() => setActiveView("active")} style={{ ...s.btnSm, background: "#eee", color: "#555" }}>Cancel</button>
+          </div>
+
+          {/* Step 1: Basics */}
+          <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #eee" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.gold, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 10 }}>Step 1 · Basics</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Name</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} placeholder="e.g. Mother's Day Double Points" />
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Description</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} placeholder="Optional short description for internal reference" />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Start date</label>
+                <input type="date" style={{ ...s.input, marginTop: 4 }} value={draft.start_date} onChange={e => setDraft({ ...draft, start_date: e.target.value })} min={today} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>End date</label>
+                <input type="date" style={{ ...s.input, marginTop: 4 }} value={draft.end_date} onChange={e => setDraft({ ...draft, end_date: e.target.value })} min={draft.start_date || today} />
+                {draft.end_date && <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Revert reminder: <strong>{computeRevertDate(draft.end_date)}</strong></div>}
+              </div>
+            </div>
+          </div>
+
+          {/* Step 2: Targeting */}
+          <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #eee" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.gold, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 10 }}>Step 2 · Targeting</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, alignSelf: "center" }}>Venues ({draft.venues.length}):</span>
+              <button onClick={() => setDraft({ ...draft, venues: stores.filter(st => st.status === "active").map(st => st.id) })} style={{ ...s.btnSm, background: "#555", padding: "4px 10px", fontSize: 10 }}>All active</button>
+              <button onClick={() => setDraft({ ...draft, venues: stores.filter(st => st.category === "Cafés" && st.status === "active").map(st => st.id) })} style={{ ...s.btnSm, background: "#555", padding: "4px 10px", fontSize: 10 }}>Cafés only</button>
+              <button onClick={() => setDraft({ ...draft, venues: stores.filter(st => st.category === "Bars" && st.status === "active").map(st => st.id) })} style={{ ...s.btnSm, background: "#555", padding: "4px 10px", fontSize: 10 }}>Bars only</button>
+              <button onClick={() => setDraft({ ...draft, venues: stores.filter(st => st.category === "Restaurants" && st.status === "active").map(st => st.id) })} style={{ ...s.btnSm, background: "#555", padding: "4px 10px", fontSize: 10 }}>Restaurants only</button>
+              <button onClick={() => setDraft({ ...draft, venues: [] })} style={{ ...s.btnSm, background: "#eee", color: "#555", padding: "4px 10px", fontSize: 10 }}>Clear</button>
+            </div>
+            <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid #eee", borderRadius: 8, padding: 8, background: "#fafafa" }}>
+              {stores.map(st => (
+                <label key={st.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", fontSize: 12, cursor: "pointer", opacity: st.status === "active" ? 1 : 0.5 }}>
+                  <input type="checkbox"
+                    checked={draft.venues.includes(st.id)}
+                    disabled={st.status !== "active"}
+                    onChange={e => setDraft({ ...draft, venues: e.target.checked ? [...draft.venues, st.id] : draft.venues.filter(v => v !== st.id) })} />
+                  <span>{st.name}</span>
+                  <span style={{ color: C.muted, fontSize: 10.5 }}>· {st.category}</span>
+                  {st.status !== "active" && <span style={{ color: "#B71C1C", fontSize: 10 }}>inactive</span>}
+                </label>
+              ))}
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Eligible tiers</label>
+              <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                {["silver","gold","platinum","corporate","staff"].map(t => (
+                  <label key={t} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid " + (draft.tiers.includes(t) ? C.gold : "#ddd"), borderRadius: 8, background: draft.tiers.includes(t) ? "#FDF8EE" : "#fff", cursor: "pointer", fontSize: 12 }}>
+                    <input type="checkbox" checked={draft.tiers.includes(t)}
+                      onChange={e => setDraft({ ...draft, tiers: e.target.checked ? [...draft.tiers, t] : draft.tiers.filter(x => x !== t) })} />
+                    {t[0].toUpperCase() + t.slice(1)}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Step 3: Mechanic */}
+          <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #eee" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.gold, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 10 }}>Step 3 · Mechanic</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+              {[
+                { id: "double_points", label: "Double Points" },
+                { id: "bonus", label: "Bonus Points" },
+                { id: "comp_item", label: "Comp Item" },
+                { id: "discount", label: "% Discount" },
+                { id: "custom", label: "Custom" },
+              ].map(m => (
+                <label key={m.id} style={{ border: "1px solid " + (draft.mechanic_type === m.id ? C.gold : "#ddd"), borderRadius: 8, padding: "8px 10px", cursor: "pointer", fontSize: 11.5, textAlign: "center", background: draft.mechanic_type === m.id ? "#FDF8EE" : "#fff" }}>
+                  <input type="radio" style={{ display: "none" }} checked={draft.mechanic_type === m.id} onChange={() => setDraft({ ...draft, mechanic_type: m.id })} />
+                  {m.label}
+                </label>
+              ))}
+            </div>
+
+            {/* Mechanic-specific config */}
+            {draft.mechanic_type === "double_points" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Multiplier</label>
+                  <input type="number" step="0.1" min="1" style={{ ...s.input, marginTop: 4 }} value={draft.mechanic_config.multiplier} onChange={e => setDraft({ ...draft, mechanic_config: { ...draft.mechanic_config, multiplier: parseFloat(e.target.value) } })} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Cap per txn (points)</label>
+                  <input type="number" min="0" style={{ ...s.input, marginTop: 4 }} value={draft.mechanic_config.cap} onChange={e => setDraft({ ...draft, mechanic_config: { ...draft.mechanic_config, cap: parseInt(e.target.value, 10) } })} />
+                </div>
+              </div>
+            )}
+            {draft.mechanic_type === "bonus" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Bonus points</label>
+                  <input type="number" min="0" style={{ ...s.input, marginTop: 4 }} value={draft.mechanic_config.bonus_points} onChange={e => setDraft({ ...draft, mechanic_config: { ...draft.mechanic_config, bonus_points: parseInt(e.target.value, 10) } })} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Min spend ($)</label>
+                  <input type="number" min="0" style={{ ...s.input, marginTop: 4 }} value={draft.mechanic_config.min_spend} onChange={e => setDraft({ ...draft, mechanic_config: { ...draft.mechanic_config, min_spend: parseFloat(e.target.value) } })} />
+                </div>
+              </div>
+            )}
+            {draft.mechanic_type === "comp_item" && (
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Comp item name</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={draft.mechanic_config.comp_item} onChange={e => setDraft({ ...draft, mechanic_config: { ...draft.mechanic_config, comp_item: e.target.value } })} placeholder="e.g. Complimentary glass of Champagne" />
+              </div>
+            )}
+            {draft.mechanic_type === "discount" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Discount %</label>
+                  <input type="number" min="0" max="100" style={{ ...s.input, marginTop: 4 }} value={draft.mechanic_config.discount_pct} onChange={e => setDraft({ ...draft, mechanic_config: { ...draft.mechanic_config, discount_pct: parseFloat(e.target.value) } })} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Min spend ($)</label>
+                  <input type="number" min="0" style={{ ...s.input, marginTop: 4 }} value={draft.mechanic_config.min_spend} onChange={e => setDraft({ ...draft, mechanic_config: { ...draft.mechanic_config, min_spend: parseFloat(e.target.value) } })} />
+                </div>
+              </div>
+            )}
+            {draft.mechanic_type === "custom" && (
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Custom description</label>
+                <textarea style={{ ...s.input, marginTop: 4, minHeight: 60, fontFamily: FONT.b }} value={draft.mechanic_config.custom_desc || ""} onChange={e => setDraft({ ...draft, mechanic_config: { ...draft.mechanic_config, custom_desc: e.target.value } })} placeholder="Describe the mechanic in ops-readable language" />
+              </div>
+            )}
+          </div>
+
+          {/* Step 4: Exclusions */}
+          <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #eee" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.gold, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 10 }}>Step 4 · Exclusions (Eber L04 workaround)</div>
+            <div style={s.bannerRed}>
+              <span>🚫</span>
+              <div>
+                <strong>Items listed here will NOT earn points during this promotion.</strong> Because Eber cannot auto-exclude, you must also update the Eber backend rules to match — that&apos;s what the checklist in Step 5 enforces. This list is the source of truth for ops.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <input style={{ ...s.input, flex: 1 }} value={newExclusion} onChange={e => setNewExclusion(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newExclusion.trim()) { setDraft({ ...draft, excluded_items: [...draft.excluded_items, newExclusion.trim()] }); setNewExclusion(""); } }} placeholder="Type an item name (e.g. Signature Oumi Omakase) and press Enter" />
+              <button onClick={() => { if (newExclusion.trim()) { setDraft({ ...draft, excluded_items: [...draft.excluded_items, newExclusion.trim()] }); setNewExclusion(""); } }} style={s.btnSm}>+ Add</button>
+            </div>
+            {draft.excluded_items.length > 0 && (
+              <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {draft.excluded_items.map((item, i) => (
+                  <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#FFEBEE", color: "#B71C1C", borderRadius: 10, padding: "4px 10px", fontSize: 11.5 }}>
+                    {item}
+                    <span onClick={() => setDraft({ ...draft, excluded_items: draft.excluded_items.filter((_, j) => j !== i) })} style={{ cursor: "pointer", fontWeight: 700 }}>×</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            {draft.excluded_items.length === 0 && <div style={{ fontSize: 11, color: C.lmuted, marginTop: 8, fontStyle: "italic" }}>No exclusions yet. If your promotion includes comp items or % discounts, list them here so points are not double-earned.</div>}
+          </div>
+
+          {/* Step 5: Checklist */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.gold, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 10 }}>Step 5 · Per-Promotion Checklist (required to save)</div>
+            <div style={{ background: "#FFFDE7", border: "1px solid #FFF176", borderRadius: 8, padding: 12 }}>
+              {[
+                { id: "eber_points", label: "Eber backend points rules updated to match this promotion" },
+                { id: "eber_stamps", label: "Eber backend stamp rules updated (if any café venues selected)" },
+                { id: "calendar_set", label: "Revert-date calendar reminder set (download .ics after save)" },
+                { id: "no_overlap", label: "Checked against overlapping promotions on same venues" },
+                { id: "documented", label: "Documented in Promotion Calendar / ops handbook" },
+              ].map(item => (
+                <label key={item.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "6px 0", fontSize: 12, cursor: "pointer" }}>
+                  <input type="checkbox" checked={draft.checklist_ack[item.id]} onChange={e => setDraft({ ...draft, checklist_ack: { ...draft.checklist_ack, [item.id]: e.target.checked } })} style={{ marginTop: 2 }} />
+                  <span style={{ textDecoration: draft.checklist_ack[item.id] ? "line-through" : "none", color: draft.checklist_ack[item.id] ? C.muted : C.text }}>{item.label}</span>
+                </label>
+              ))}
+              <div style={{ marginTop: 10, fontSize: 11, color: checklistComplete ? "#2E7D32" : C.muted, fontWeight: 600 }}>
+                {Object.values(draft.checklist_ack).filter(Boolean).length} / 5 checked {checklistComplete && "✓"}
+              </div>
+            </div>
+          </div>
+
+          {/* Save */}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", borderTop: "1px solid #eee", paddingTop: 16 }}>
+            <button onClick={() => setActiveView("active")} style={{ ...s.btnSm, background: "#eee", color: "#555" }} disabled={inProgress}>Cancel</button>
+            <button onClick={savePromotion} disabled={inProgress || !checklistComplete || !draft.name?.trim() || !draft.start_date || !draft.end_date || draft.venues.length === 0 || draft.tiers.length === 0} style={{ ...s.btn, opacity: (inProgress || !checklistComplete || !draft.name?.trim() || !draft.start_date || !draft.end_date || draft.venues.length === 0 || draft.tiers.length === 0) ? 0.4 : 1 }}>
+              {inProgress ? "Saving…" : "Save promotion"}
+            </button>
+          </div>
         </div>
-      )) : <div style={{ color: C.muted }}>No campaigns</div>}
-      <div style={s.aiPanel}>
-        <div style={s.aiBadge}>✦ AI CAMPAIGN BUILDER</div>
-        <textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Describe your campaign…" style={{ width: "100%", background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.15)", borderRadius: 8, padding: 12, color: "#fff", fontSize: 13, fontFamily: FONT.b, minHeight: 60, marginTop: 12, resize: "vertical" }} />
-        <button onClick={async () => { if(!prompt.trim()) return; setAiLoading(true); setAiResult(await askClaude(SYS_CAMPAIGN, prompt)); setAiLoading(false); }} disabled={aiLoading} style={{ ...s.btn, marginTop: 8, opacity: aiLoading ? 0.5 : 1 }}>{aiLoading ? "Designing…" : "Design Campaign"}</button>
-        {aiResult && <pre style={{ marginTop: 16, fontSize: 12, lineHeight: 1.6, color: "#eee", whiteSpace: "pre-wrap", fontFamily: FONT.b }}>{aiResult}</pre>}
-      </div>
+      ) : (
+        /* ─── LIST VIEWS ─── */
+        <div>
+          {loading ? (
+            <div style={{ display: "flex", justifyContent: "center", padding: 40 }}><Spinner /></div>
+          ) : visible.length === 0 ? (
+            <div style={{ ...s.card, padding: 40, textAlign: "center", color: C.lmuted }}>
+              No {activeView} promotions. {activeView === "active" && "Create a new promotion to get started."}
+            </div>
+          ) : (
+            visible.map(p => <PromotionCard key={p.id} p={p} />)
+          )}
+        </div>
+      )}
+
+      {/* ─── Phase 1 campaigns (preserved) ─── */}
+      {activeView !== "create" && campaigns.length > 0 && (
+        <div style={{ marginTop: 32 }}>
+          <h3 style={s.h3}>Email Campaigns (Phase 1)</h3>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>Separate from promotions above. Channel-based member outreach.</div>
+          {campaigns.map((c, i) => (
+            <div key={i} style={{ ...s.card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div><div style={{ fontWeight: 600 }}>{c.name}</div><div style={{ fontSize: 11, color: C.muted }}>{c.segment || c.channel} · {c.start_date} → {c.end_date}</div></div>
+              <span style={s.badge(c.status === "active" ? "gold" : "silver")}>{c.status}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ─── AI Assistant (preserved from Phase 1) ─── */}
+      {activeView !== "create" && (
+        <div style={s.aiPanel}>
+          <div style={s.aiBadge}>✦ AI PROMOTION DESIGN ASSISTANT</div>
+          <div style={{ fontSize: 11, color: "#ccc", marginTop: 6 }}>Describe a promotion idea and Claude will flag Eber limitations, suggest exclusion rules, and outline the per-promotion checklist.</div>
+          <textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="e.g. Mother's Day 2x points at all Cafés + restaurants, comp dessert…" style={{ width: "100%", background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.15)", borderRadius: 8, padding: 12, color: "#fff", fontSize: 13, fontFamily: FONT.b, minHeight: 60, marginTop: 12, resize: "vertical" }} />
+          <button onClick={async () => { if (!prompt.trim()) return; setAiLoading(true); setAiResult(await askClaude(SYS_CAMPAIGN, prompt)); setAiLoading(false); }} disabled={aiLoading} style={{ ...s.btn, marginTop: 8, opacity: aiLoading ? 0.5 : 1 }}>{aiLoading ? "Designing…" : "Ask Claude"}</button>
+          {aiResult && <pre style={{ marginTop: 16, fontSize: 12, lineHeight: 1.6, color: "#eee", whiteSpace: "pre-wrap", fontFamily: FONT.b }}>{aiResult}</pre>}
+        </div>
+      )}
     </div>
   );
 }
