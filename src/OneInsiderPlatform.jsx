@@ -1244,19 +1244,263 @@ function Members({ members, transactions, reload }) {
   }
 }
 
-// ─── VOUCHERS ───
+// ─── U18 VOUCHERS (Catalogue CRUD + Phase 1 reference) ───
 function Vouchers() {
-  const vouchers = [
+  // Phase 1 hard-coded reference (preserved — this is the loyalty programme spec, not catalogue data)
+  const voucherReference = [
     { type: "Welcome", tiers: "All tiers", trigger: "Signup", values: "Silver: $10 (min $20) · Gold/Plat/Corp: $10", auto: true },
     { type: "Dining (Non-Stop Hits)", tiers: "Gold, Platinum, Corporate", trigger: "Signup + refill", values: "Gold: 10×$20 · Plat: 10×$25 · Corp: 10×$20", auto: true },
     { type: "Points Redemption", tiers: "All (excl Staff)", trigger: "Member redeems points", values: "100pts=$10 · 150pts=$15 · 250pts=$25", auto: false },
     { type: "Birthday Discount", tiers: "All", trigger: "Birthday month", values: "Silver 10% · Gold 15% · Plat 20% (% off bill, NOT voucher)", auto: true },
   ];
+
+  // U18 state
+  const [catalogue, setCatalogue] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [currentAdminId, setCurrentAdminId] = useState(null);
+  const [modal, setModal] = useState(null); // { mode: 'create'|'edit', entry: {...} }
+  const [inProgress, setInProgress] = useState(false);
+  const [filter, setFilter] = useState({ type: "all", active: "all" });
+
+  const blank = () => ({
+    name: "", type: "dining", value: 20,
+    tier_eligibility: ["gold","platinum","corporate"],
+    validity_start: "", validity_end: "",
+    stacking_rules: { cash_with_points: true, with_promotion: false, with_birthday: false },
+    min_spend: 0,
+    auto_issue_trigger: null,
+    active: true,
+  });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [c, a] = await Promise.all([
+        supaFetch("voucher_catalogue?order=created_at.desc"),
+        supaFetch("admin_users?role=eq.super_admin&limit=1"),
+      ]);
+      if (Array.isArray(c)) setCatalogue(c);
+      if (Array.isArray(a) && a[0]) setCurrentAdminId(a[0].id);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]); // eslint-disable-line react-hooks/set-state-in-effect
+
+  const logAudit = async (entryId, action, before, after, reason) => {
+    if (!currentAdminId) return;
+    try {
+      await supaFetch("audit_log", {
+        method: "POST",
+        body: {
+          admin_user_id: currentAdminId,
+          entity_type: "voucher_catalogue",
+          entity_id: String(entryId),
+          action, before_value: before, after_value: after, reason,
+        },
+      });
+    } catch (e) { console.error("Audit log failed:", e); }
+  };
+
+  const saveEntry = async () => {
+    if (!modal) return;
+    const e = modal.entry;
+    if (!e.name?.trim()) { alert("Name is required"); return; }
+    if (!e.type) { alert("Type is required"); return; }
+    if (e.value == null || e.value < 0) { alert("Value must be 0 or greater"); return; }
+    if (!e.tier_eligibility || e.tier_eligibility.length === 0) { alert("At least one tier must be eligible"); return; }
+
+    setInProgress(true);
+    try {
+      const body = {
+        name: e.name.trim(),
+        type: e.type,
+        value: parseFloat(e.value),
+        tier_eligibility: e.tier_eligibility,
+        validity_start: e.validity_start || null,
+        validity_end: e.validity_end || null,
+        stacking_rules: e.stacking_rules,
+        min_spend: parseFloat(e.min_spend || 0),
+        auto_issue_trigger: e.auto_issue_trigger || null,
+        active: e.active,
+      };
+
+      if (modal.mode === "create") {
+        const r = await supaFetch("voucher_catalogue", { method: "POST", body });
+        if (Array.isArray(r) && r[0]) await logAudit(r[0].id, "create", null, r[0], null);
+      } else {
+        const before = catalogue.find(c => c.id === e.id);
+        const after = { ...body, updated_at: new Date().toISOString() };
+        await supaFetch(`voucher_catalogue?id=eq.${e.id}`, { method: "PATCH", body: after });
+        await logAudit(e.id, "update", before, { ...before, ...body }, null);
+      }
+      setModal(null);
+      load();
+    } catch (err) {
+      console.error("Save failed:", err);
+      alert("Save failed. Check console.");
+    }
+    setInProgress(false);
+  };
+
+  const toggleActive = async (entry) => {
+    const newActive = !entry.active;
+    const verb = newActive ? "Activate" : "Deactivate";
+    if (!window.confirm(`${verb} "${entry.name}"?\n\n${newActive ? "Will reappear in the Add Voucher catalogue picker." : "Will be hidden from future voucher issuance flows. Existing vouchers of this type remain valid."}`)) return;
+    await supaFetch(`voucher_catalogue?id=eq.${entry.id}`, { method: "PATCH", body: { active: newActive, updated_at: new Date().toISOString() } });
+    await logAudit(entry.id, "update", { active: entry.active }, { active: newActive }, newActive ? "Activated" : "Deactivated");
+    load();
+  };
+
+  const duplicateForNextYear = async (entry) => {
+    if (!entry.validity_end) { alert("Cannot duplicate: this entry has no validity end date."); return; }
+    const rollForward = (d) => {
+      if (!d) return null;
+      const nd = new Date(d);
+      nd.setFullYear(nd.getFullYear() + 1);
+      return nd.toISOString().slice(0, 10);
+    };
+    const newEntry = {
+      ...entry,
+      name: `${entry.name} (next year)`,
+      validity_start: rollForward(entry.validity_start),
+      validity_end: rollForward(entry.validity_end),
+      active: false, // Start inactive — Nov/Dec annual workflow per Phase 1
+    };
+    delete newEntry.id;
+    delete newEntry.created_at;
+    delete newEntry.updated_at;
+    if (!window.confirm(`Duplicate "${entry.name}" for next year?\n\nNew validity: ${newEntry.validity_start} → ${newEntry.validity_end}\n\nNew entry created as INACTIVE (per Phase 1 Nov/Dec workflow — test in Staging before activation).`)) return;
+    const r = await supaFetch("voucher_catalogue", { method: "POST", body: newEntry });
+    if (Array.isArray(r) && r[0]) await logAudit(r[0].id, "create", null, r[0], `Duplicated from ${entry.id} for next-year annual lifecycle`);
+    load();
+  };
+
+  // Filter catalogue
+  const filtered = catalogue.filter(c => {
+    if (filter.type !== "all" && c.type !== filter.type) return false;
+    if (filter.active === "active" && !c.active) return false;
+    if (filter.active === "inactive" && c.active) return false;
+    return true;
+  });
+
+  const typeColours = {
+    cash:      { bg: "#E8F5E9", fg: "#2E7D32" },
+    dining:    { bg: "#FDF8EE", fg: "#8B6914" },
+    points:    { bg: "#E3F2FD", fg: "#1565C0" },
+    tactical:  { bg: "#EDE7F6", fg: "#4527A0" },
+    welcome:   { bg: "#FFF8E1", fg: "#5D4037" },
+    birthday:  { bg: "#FCE4EC", fg: "#880E4F" },
+  };
+
   return (
     <div style={{ animation: "fadeIn .3s ease" }}>
-      <h2 style={s.h2}>Voucher Management</h2>
-      <div style={s.bannerAmber}><span>⚠️</span><div><strong>P&L:</strong> Voucher redemption = revenue (ENT-voucher), NOT COGS discount.</div></div>
-      {vouchers.map((v,i) => (
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={{ ...s.h2, marginBottom: 0 }}>Voucher Management</h2>
+        <button onClick={() => setModal({ mode: "create", entry: blank() })} style={s.btn}>+ New Voucher Template</button>
+      </div>
+
+      <div style={s.bannerGreen}>
+        <span>✅</span>
+        <div>
+          <strong>Voucher catalogue drives the U16 Add Voucher picker.</strong> Templates added here populate the &ldquo;From catalogue&rdquo; option on every member&apos;s voucher panel. Use this for reusable voucher types (welcome, dining, tactical, seasonal).
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div style={{ ...s.card, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1.2 }}>Filters</span>
+        <select value={filter.type} onChange={e => setFilter({ ...filter, type: e.target.value })} style={{ ...s.input, width: "auto", padding: "8px 12px" }}>
+          <option value="all">All types</option>
+          <option value="cash">Cash</option>
+          <option value="dining">Dining</option>
+          <option value="points">Points</option>
+          <option value="tactical">Tactical</option>
+          <option value="welcome">Welcome</option>
+          <option value="birthday">Birthday</option>
+        </select>
+        <select value={filter.active} onChange={e => setFilter({ ...filter, active: e.target.value })} style={{ ...s.input, width: "auto", padding: "8px 12px" }}>
+          <option value="all">All statuses</option>
+          <option value="active">Active only</option>
+          <option value="inactive">Inactive only</option>
+        </select>
+        <div style={{ marginLeft: "auto", fontSize: 11, color: C.muted }}>{filtered.length} of {catalogue.length} shown</div>
+      </div>
+
+      {/* Catalogue table */}
+      <div style={s.card}>
+        {loading ? (
+          <div style={{ display: "flex", justifyContent: "center", padding: 40 }}><Spinner /></div>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: C.lmuted, fontSize: 13 }}>
+            {catalogue.length === 0 ? (
+              <>
+                <div style={{ marginBottom: 8 }}>No voucher templates yet.</div>
+                <div style={{ fontSize: 11 }}>Click <strong>+ New Voucher Template</strong> to add your first reusable voucher type (e.g. &ldquo;Gold $20 Dining 2026&rdquo;, &ldquo;Mother&apos;s Day Tactical Comp&rdquo;).</div>
+              </>
+            ) : "No entries match the current filters."}
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1100 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: C.lmuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+                  <th style={{ padding: "10px 8px" }}>Name</th>
+                  <th style={{ padding: "10px 8px" }}>Type</th>
+                  <th style={{ padding: "10px 8px", textAlign: "right" }}>Value</th>
+                  <th style={{ padding: "10px 8px" }}>Tiers</th>
+                  <th style={{ padding: "10px 8px" }}>Validity</th>
+                  <th style={{ padding: "10px 8px" }}>Trigger</th>
+                  <th style={{ padding: "10px 8px", textAlign: "center" }}>Min spend</th>
+                  <th style={{ padding: "10px 8px" }}>Status</th>
+                  <th style={{ padding: "10px 8px" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(c => {
+                  const tc = typeColours[c.type] || { bg: "#eee", fg: "#666" };
+                  return (
+                    <tr key={c.id} style={{ borderTop: "1px solid #eee" }}>
+                      <td style={{ padding: "10px 8px", fontWeight: 500 }}>{c.name}</td>
+                      <td style={{ padding: "10px 8px" }}>
+                        <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 8, fontSize: 10, fontWeight: 600, background: tc.bg, color: tc.fg, textTransform: "capitalize" }}>{c.type}</span>
+                      </td>
+                      <td style={{ padding: "10px 8px", textAlign: "right", ...s.mono, fontWeight: 600 }}>${parseFloat(c.value || 0).toFixed(2)}</td>
+                      <td style={{ padding: "10px 8px", fontSize: 11 }}>{(c.tier_eligibility || []).map(t => t[0].toUpperCase() + t.slice(1)).join(", ")}</td>
+                      <td style={{ padding: "10px 8px", fontSize: 11, color: C.muted }}>
+                        {c.validity_start && c.validity_end ? `${c.validity_start} → ${c.validity_end}` : <span style={{ color: C.lmuted }}>—</span>}
+                      </td>
+                      <td style={{ padding: "10px 8px", fontSize: 11 }}>{c.auto_issue_trigger ? <span style={{ background: "#E8F5E9", color: "#2E7D32", padding: "2px 8px", borderRadius: 8, fontSize: 10, fontWeight: 600 }}>{c.auto_issue_trigger}</span> : <span style={{ color: C.lmuted }}>manual</span>}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center", fontSize: 11, color: C.muted }}>{parseFloat(c.min_spend || 0) > 0 ? `$${c.min_spend}` : "—"}</td>
+                      <td style={{ padding: "10px 8px" }}>
+                        <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 10, fontSize: 10.5, fontWeight: 600, background: c.active ? "#E8F5E9" : "#FFEBEE", color: c.active ? "#2E7D32" : "#B71C1C" }}>
+                          {c.active ? "active" : "inactive"}
+                        </span>
+                      </td>
+                      <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
+                        <button onClick={() => setModal({ mode: "edit", entry: { ...c } })} style={s.btnSm}>Edit</button>
+                        {" "}
+                        {c.validity_end && <><button onClick={() => duplicateForNextYear(c)} style={{ ...s.btnSm, background: "#555" }} title="Duplicate for next year (Nov/Dec annual lifecycle)">+1yr</button>{" "}</>}
+                        <button onClick={() => toggleActive(c)} style={c.active ? s.btnDanger : s.btnSuccess}>{c.active ? "Deactivate" : "Activate"}</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div style={s.bannerAmber}>
+        <span>⚠️</span>
+        <div><strong>P&amp;L:</strong> Voucher redemption = revenue (ENT-voucher line), NOT a COGS discount. Finance team reads this through Insights &gt; eStore &gt; Sales Transactions.</div>
+      </div>
+
+      {/* Phase 1 reference: Voucher types (hard-coded programme spec) */}
+      <h3 style={{ ...s.h3, marginTop: 24 }}>Voucher Types (programme reference)</h3>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>The 4 core voucher types defined by the 1-Insider 3.0 loyalty spec. Use the catalogue above to create specific templates that implement these types.</div>
+      {voucherReference.map((v, i) => (
         <div key={i} style={s.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <h3 style={{ ...s.h3, margin: 0 }}>{v.type}</h3>
@@ -1266,9 +1510,10 @@ function Vouchers() {
           <div style={{ fontSize: 12, marginTop: 4 }}><strong>Values:</strong> {v.values}</div>
         </div>
       ))}
+
       <h3 style={s.h3}>Annual Lifecycle</h3>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        {VOUCHER_LIFECYCLE.map((l,i) => (
+        {VOUCHER_LIFECYCLE.map((l, i) => (
           <div key={i} style={{ ...s.card, flex: "1 1 160px", textAlign: "center", minWidth: 140 }}>
             <div style={{ fontSize: 24, marginBottom: 8 }}>{l.icon}</div>
             <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{l.month}</div>
@@ -1276,12 +1521,116 @@ function Vouchers() {
           </div>
         ))}
       </div>
+
       <h3 style={{ ...s.h3, marginTop: 20 }}>Stacking Rules</h3>
       <div style={s.card}>
-        {[{c:"Cash voucher + Points voucher",ok:true},{c:"Cash + Cash voucher",ok:false},{c:"Points + Points voucher",ok:false},{c:"Any voucher + Birthday discount",ok:false},{c:"Any voucher + Active promotion",ok:false},{c:"Stamp rewards + Stamp rewards",ok:true}].map((r,i) => (
+        {[{ c: "Cash voucher + Points voucher", ok: true }, { c: "Cash + Cash voucher", ok: false }, { c: "Points + Points voucher", ok: false }, { c: "Any voucher + Birthday discount", ok: false }, { c: "Any voucher + Active promotion", ok: false }, { c: "Stamp rewards + Stamp rewards", ok: true }].map((r, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid #f5f5f5", fontSize: 12.5 }}>{r.ok ? "✅" : "❌"} {r.c}</div>
         ))}
       </div>
+
+      {/* ─── Create/Edit modal ─── */}
+      {modal && (
+        <div style={s.modal} onClick={() => !inProgress && setModal(null)}>
+          <div style={{ ...s.modalInner, maxWidth: 640 }} onClick={e => e.stopPropagation()}>
+            <div style={s.h3}>{modal.mode === "create" ? "New Voucher Template" : `Edit: ${modal.entry.name}`}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Name</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={modal.entry.name} onChange={e => setModal({ ...modal, entry: { ...modal.entry, name: e.target.value } })} placeholder="e.g. Gold $20 Dining 2026" />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Type</label>
+                <select style={{ ...s.input, marginTop: 4 }} value={modal.entry.type} onChange={e => setModal({ ...modal, entry: { ...modal.entry, type: e.target.value } })}>
+                  <option value="cash">Cash</option>
+                  <option value="dining">Dining</option>
+                  <option value="points">Points</option>
+                  <option value="tactical">Tactical</option>
+                  <option value="welcome">Welcome</option>
+                  <option value="birthday">Birthday</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Value ($)</label>
+                <input type="number" step="0.01" min="0" style={{ ...s.input, marginTop: 4, ...s.mono }} value={modal.entry.value} onChange={e => setModal({ ...modal, entry: { ...modal.entry, value: e.target.value } })} />
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Eligible tiers</label>
+                <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                  {["silver","gold","platinum","corporate","staff"].map(t => {
+                    const checked = (modal.entry.tier_eligibility || []).includes(t);
+                    return (
+                      <label key={t} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid " + (checked ? C.gold : "#ddd"), borderRadius: 8, background: checked ? "#FDF8EE" : "#fff", cursor: "pointer", fontSize: 12 }}>
+                        <input type="checkbox" checked={checked}
+                          onChange={e => {
+                            const cur = modal.entry.tier_eligibility || [];
+                            const next = e.target.checked ? [...cur, t] : cur.filter(x => x !== t);
+                            setModal({ ...modal, entry: { ...modal.entry, tier_eligibility: next } });
+                          }} />
+                        {t[0].toUpperCase() + t.slice(1)}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Validity start</label>
+                <input type="date" style={{ ...s.input, marginTop: 4 }} value={modal.entry.validity_start || ""} onChange={e => setModal({ ...modal, entry: { ...modal.entry, validity_start: e.target.value } })} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Validity end</label>
+                <input type="date" style={{ ...s.input, marginTop: 4 }} value={modal.entry.validity_end || ""} onChange={e => setModal({ ...modal, entry: { ...modal.entry, validity_end: e.target.value } })} min={modal.entry.validity_start || ""} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Auto-issue trigger</label>
+                <select style={{ ...s.input, marginTop: 4 }} value={modal.entry.auto_issue_trigger || ""} onChange={e => setModal({ ...modal, entry: { ...modal.entry, auto_issue_trigger: e.target.value || null } })}>
+                  <option value="">Manual only</option>
+                  <option value="signup">Signup</option>
+                  <option value="renewal">Renewal</option>
+                  <option value="birthday">Birthday month</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Min spend ($, optional)</label>
+                <input type="number" step="0.01" min="0" style={{ ...s.input, marginTop: 4, ...s.mono }} value={modal.entry.min_spend || 0} onChange={e => setModal({ ...modal, entry: { ...modal.entry, min_spend: e.target.value } })} />
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Stacking rules</label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 6 }}>
+                  {[
+                    { key: "cash_with_points", label: "Stack with points voucher" },
+                    { key: "with_promotion", label: "Stack with promotion" },
+                    { key: "with_birthday", label: "Stack with birthday discount" },
+                  ].map(r => (
+                    <label key={r.key} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid #ddd", borderRadius: 8, fontSize: 11, cursor: "pointer" }}>
+                      <input type="checkbox" checked={!!(modal.entry.stacking_rules || {})[r.key]} onChange={e => setModal({ ...modal, entry: { ...modal.entry, stacking_rules: { ...(modal.entry.stacking_rules || {}), [r.key]: e.target.checked } } })} />
+                      {r.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                  <input type="checkbox" checked={modal.entry.active} onChange={e => setModal({ ...modal, entry: { ...modal.entry, active: e.target.checked } })} />
+                  Active (appears in Add Voucher catalogue picker)
+                </label>
+              </div>
+            </div>
+
+            <div style={{ ...s.bannerAmber, marginTop: 16 }}>
+              <span>⚠️</span>
+              <div>If this template is meant to auto-issue (signup/renewal/birthday), remember to configure the matching trigger in Eber backend. This admin panel records intent; Eber executes.</div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setModal(null)} disabled={inProgress} style={{ ...s.btnSm, background: "#eee", color: "#555", opacity: inProgress ? 0.5 : 1 }}>Cancel</button>
+              <button onClick={saveEntry} disabled={inProgress || !modal.entry.name?.trim() || (modal.entry.tier_eligibility || []).length === 0} style={{ ...s.btn, opacity: (inProgress || !modal.entry.name?.trim() || (modal.entry.tier_eligibility || []).length === 0) ? 0.5 : 1 }}>
+                {inProgress ? "Saving…" : (modal.mode === "create" ? "Create template" : "Save changes")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
