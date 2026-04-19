@@ -475,6 +475,13 @@ function Members({ members, transactions, reload }) {
   const [u17Stores, setU17Stores] = useState([]);
   const [u17CurrentAdminId, setU17CurrentAdminId] = useState(null);
 
+  // U16 state — individual voucher records
+  const [memberVouchers, setMemberVouchers] = useState([]);
+  const [u16AddModal, setU16AddModal] = useState(null); // voucher draft
+  const [u16RemoveConfirm, setU16RemoveConfirm] = useState(null); // { voucher, reason }
+  const [u16InProgress, setU16InProgress] = useState(false);
+  const [u16Catalogue, setU16Catalogue] = useState([]);
+
   const filtered = members.filter(m => {
     const ms = !search || (m.name||"").toLowerCase().includes(search.toLowerCase()) || (m.id||"").toLowerCase().includes(search.toLowerCase()) || (m.mobile||"").includes(search);
     return ms && (tierFilter === "all" || m.tier === tierFilter);
@@ -512,6 +519,100 @@ function Members({ members, transactions, reload }) {
         },
       });
     } catch (e) { console.error("Audit log failed:", e); }
+  };
+
+  // U16: fetch individual voucher records when a member is selected; lazy-load catalogue and admin attribution on first open
+  useEffect(() => {
+    if (!selected) { setMemberVouchers([]); return; }
+    (async () => {
+      const calls = [supaFetch(`vouchers?member_id=eq.${selected.id}&order=issued_at.desc`)];
+      if (u16Catalogue.length === 0) calls.push(supaFetch("voucher_catalogue?active=eq.true&order=name.asc"));
+      if (!u17CurrentAdminId) calls.push(supaFetch("admin_users?role=eq.super_admin&limit=1"));
+      const results = await Promise.all(calls);
+      if (Array.isArray(results[0])) setMemberVouchers(results[0]);
+      let idx = 1;
+      if (u16Catalogue.length === 0) { if (Array.isArray(results[idx])) setU16Catalogue(results[idx]); idx++; }
+      if (!u17CurrentAdminId) { if (Array.isArray(results[idx]) && results[idx][0]) setU17CurrentAdminId(results[idx][0].id); }
+    })();
+  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const u16LogAudit = async (action, voucher, reason) => {
+    if (!u17CurrentAdminId) { console.warn("Audit log skipped — no admin attribution"); return null; }
+    try {
+      const r = await supaFetch("audit_log", {
+        method: "POST",
+        body: {
+          admin_user_id: u17CurrentAdminId,
+          entity_type: "voucher",
+          entity_id: String(voucher.id),
+          action,
+          before_value: action === "remove_voucher" ? voucher : null,
+          after_value: action === "add_voucher" ? voucher : (action === "remove_voucher" ? { ...voucher, status: "removed", removed_reason: reason } : null),
+          reason,
+        },
+      });
+      return Array.isArray(r) && r[0] ? r[0].id : null;
+    } catch (e) { console.error("Audit log failed:", e); return null; }
+  };
+
+  const u16AddVoucher = async () => {
+    if (!u16AddModal || !selected) return;
+    const { source, catalogue_id, type, value, reason, notes } = u16AddModal;
+    if (!type) { alert("Voucher type is required"); return; }
+    if (!value || value <= 0) { alert("Value must be greater than 0"); return; }
+    if (!reason) { alert("Reason code is required"); return; }
+    setU16InProgress(true);
+    try {
+      // Insert voucher
+      const body = {
+        member_id: selected.id,
+        catalogue_id: source === "catalogue" ? catalogue_id : null,
+        type,
+        value: parseFloat(value),
+        status: "active",
+        source: "manual_admin_add",
+      };
+      const r = await supaFetch("vouchers", { method: "POST", body });
+      if (!Array.isArray(r) || !r[0]) throw new Error("Insert failed");
+      const created = r[0];
+      const fullReason = notes ? `${reason} — ${notes}` : reason;
+      const auditId = await u16LogAudit("add_voucher", created, fullReason);
+      if (auditId) {
+        await supaFetch(`vouchers?id=eq.${created.id}`, { method: "PATCH", body: { audit_log_id: auditId } });
+      }
+      flash(`$${value} ${type} voucher added to ${selected.name}'s wallet — audit logged`);
+      setU16AddModal(null);
+      // Refresh voucher list
+      const fresh = await supaFetch(`vouchers?member_id=eq.${selected.id}&order=issued_at.desc`);
+      if (Array.isArray(fresh)) setMemberVouchers(fresh);
+    } catch (e) {
+      console.error("Add voucher failed:", e);
+      alert("Add failed. Check console. Nothing written to Supabase.");
+    }
+    setU16InProgress(false);
+  };
+
+  const u16RemoveVoucher = async () => {
+    if (!u16RemoveConfirm || !selected) return;
+    const { voucher, reason, notes } = u16RemoveConfirm;
+    if (!reason) { alert("Reason code is required"); return; }
+    setU16InProgress(true);
+    try {
+      const fullReason = notes ? `${reason} — ${notes}` : reason;
+      await supaFetch(`vouchers?id=eq.${voucher.id}`, {
+        method: "PATCH",
+        body: { status: "removed", removed_reason: fullReason },
+      });
+      await u16LogAudit("remove_voucher", voucher, fullReason);
+      flash(`Voucher #${String(voucher.id).slice(0,8)} removed — audit logged`);
+      setU16RemoveConfirm(null);
+      const fresh = await supaFetch(`vouchers?member_id=eq.${selected.id}&order=issued_at.desc`);
+      if (Array.isArray(fresh)) setMemberVouchers(fresh);
+    } catch (e) {
+      console.error("Remove voucher failed:", e);
+      alert("Remove failed. Check console.");
+    }
+    setU16InProgress(false);
   };
 
   // ── Admin Actions ──
@@ -697,6 +798,71 @@ function Members({ members, transactions, reload }) {
                 {tierData.nonStop && <div style={{ fontSize: 10, color: C.muted, marginTop: 8 }}>Non-Stop Hits: unlimited refills when set is fully used. Sets claimed: {selected.voucher_sets_used||0}</div>}
               </div>
             )}
+
+            {/* ── U16: INDIVIDUAL VOUCHER RECORDS ── */}
+            <div style={{ background: "#F9F5EC", border: "1px solid " + C.gold + "33", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <h3 style={{ ...s.h3, margin: 0 }}>📋 Voucher Records</h3>
+                <button onClick={() => setU16AddModal({ source: "custom", catalogue_id: null, type: "dining", value: 20, reason: "", notes: "" })} style={s.btnSm}>+ Add Voucher</button>
+              </div>
+              <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 10 }}>
+                Individual voucher events — the foundation for the U10 QR redemption flow. Writes to the <code style={s.mono}>vouchers</code> table with full audit attribution. Runs parallel to the Non-Stop Hits counter above until U10 unifies them.
+              </div>
+              {memberVouchers.length === 0 ? (
+                <div style={{ padding: 16, textAlign: "center", color: C.lmuted, fontSize: 12, background: "#fff", borderRadius: 8 }}>
+                  No voucher records yet. Use &quot;+ Add Voucher&quot; to create one (e.g. to replace an accidentally consumed voucher, issue a goodwill voucher, or correct a Non-Stop Hits error).
+                </div>
+              ) : (
+                <div style={{ background: "#fff", borderRadius: 8, overflow: "hidden" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: C.lmuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1, background: "#fafafa" }}>
+                        <th style={{ padding: "8px 10px" }}>Type</th>
+                        <th style={{ padding: "8px 10px" }}>Value</th>
+                        <th style={{ padding: "8px 10px" }}>Status</th>
+                        <th style={{ padding: "8px 10px" }}>Source</th>
+                        <th style={{ padding: "8px 10px" }}>Issued</th>
+                        <th style={{ padding: "8px 10px" }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {memberVouchers.map(v => {
+                        const statusColours = {
+                          active:        { bg: "#E8F5E9", fg: "#2E7D32" },
+                          pending_scan:  { bg: "#FFF8E1", fg: "#5D4037" },
+                          consumed:      { bg: "#E3F2FD", fg: "#1565C0" },
+                          expired:       { bg: "#F7F7F7", fg: "#666" },
+                          returned:      { bg: "#F7F7F7", fg: "#666" },
+                          removed:       { bg: "#FFEBEE", fg: "#B71C1C" },
+                        };
+                        const sc = statusColours[v.status] || { bg: "#eee", fg: "#666" };
+                        const canRemove = v.status === "active" || v.status === "pending_scan";
+                        return (
+                          <tr key={v.id} style={{ borderTop: "1px solid #f0f0f0" }}>
+                            <td style={{ padding: "8px 10px", fontWeight: 500, textTransform: "capitalize" }}>{v.type}</td>
+                            <td style={{ padding: "8px 10px", ...s.mono, fontWeight: 600 }}>${parseFloat(v.value || 0).toFixed(2)}</td>
+                            <td style={{ padding: "8px 10px" }}>
+                              <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 8, fontSize: 10, fontWeight: 600, background: sc.bg, color: sc.fg }}>{v.status}</span>
+                            </td>
+                            <td style={{ padding: "8px 10px", fontSize: 10.5, color: C.muted }}>{(v.source || "").replace(/_/g, " ")}</td>
+                            <td style={{ padding: "8px 10px", fontSize: 10.5, color: C.muted, whiteSpace: "nowrap" }}>{v.issued_at ? new Date(v.issued_at).toLocaleDateString("en-SG", { day: "2-digit", month: "short" }) : "—"}</td>
+                            <td style={{ padding: "8px 10px" }}>
+                              {canRemove ? (
+                                <button onClick={() => setU16RemoveConfirm({ voucher: v, reason: "", notes: "" })} style={{ ...s.btnSm, background: "#eee", color: "#D32F2F", padding: "4px 10px", fontSize: 10.5 }}>Remove</button>
+                              ) : v.removed_reason ? (
+                                <span style={{ fontSize: 10, color: C.lmuted, fontStyle: "italic" }} title={v.removed_reason}>{v.removed_reason.slice(0, 30)}{v.removed_reason.length > 30 ? "…" : ""}</span>
+                              ) : (
+                                <span style={{ fontSize: 10, color: C.lmuted }}>—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
 
             {/* Transaction History */}
             <h3 style={s.h3}>Transaction History</h3>
@@ -904,6 +1070,128 @@ function Members({ members, transactions, reload }) {
                 style={{ ...s.btn, background: "#D32F2F", opacity: (!tierDowngradeConfirm.reason?.trim() || saveInProgress) ? 0.5 : 1 }}
               >
                 {saveInProgress ? "Saving…" : `Confirm downgrade to ${tierDowngradeConfirm.toTier}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── U16: ADD VOUCHER MODAL ── */}
+      {u16AddModal && selected && (
+        <div style={{ ...s.modal, zIndex: 1001 }} onClick={() => !u16InProgress && setU16AddModal(null)}>
+          <div style={{ ...s.modalInner, maxWidth: 540 }} onClick={e => e.stopPropagation()}>
+            <div style={s.h3}>Add Voucher to {selected.name}</div>
+            <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 16 }}>
+              Creates a new voucher record tied to this member. Every add is audit-logged.
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Source</label>
+                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                  <label style={{ flex: 1, border: "1px solid " + (u16AddModal.source === "custom" ? C.gold : "#ddd"), borderRadius: 8, padding: "8px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontSize: 12, background: u16AddModal.source === "custom" ? "#FDF8EE" : "#fff" }}>
+                    <input type="radio" checked={u16AddModal.source === "custom"} onChange={() => setU16AddModal({ ...u16AddModal, source: "custom", catalogue_id: null })} />
+                    Custom voucher
+                  </label>
+                  <label style={{ flex: 1, border: "1px solid " + (u16AddModal.source === "catalogue" ? C.gold : "#ddd"), borderRadius: 8, padding: "8px 12px", cursor: u16Catalogue.length > 0 ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 8, fontSize: 12, background: u16AddModal.source === "catalogue" ? "#FDF8EE" : "#fff", opacity: u16Catalogue.length > 0 ? 1 : 0.5 }}>
+                    <input type="radio" checked={u16AddModal.source === "catalogue"} disabled={u16Catalogue.length === 0} onChange={() => setU16AddModal({ ...u16AddModal, source: "catalogue" })} />
+                    From catalogue ({u16Catalogue.length})
+                  </label>
+                </div>
+                {u16Catalogue.length === 0 && <div style={{ fontSize: 10, color: C.lmuted, marginTop: 4 }}>Catalogue is empty. Use the Voucher Management tab to add reusable templates (U18, not yet built).</div>}
+              </div>
+
+              {u16AddModal.source === "catalogue" && (
+                <div style={{ gridColumn: "span 2" }}>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Catalogue entry</label>
+                  <select style={{ ...s.input, marginTop: 4 }} value={u16AddModal.catalogue_id || ""} onChange={e => {
+                    const id = e.target.value;
+                    const entry = u16Catalogue.find(c => c.id === id);
+                    setU16AddModal({ ...u16AddModal, catalogue_id: id, type: entry?.type || "dining", value: entry?.value || 0 });
+                  }}>
+                    <option value="">Select…</option>
+                    {u16Catalogue.map(c => <option key={c.id} value={c.id}>{c.name} · {c.type} · ${c.value}</option>)}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Type</label>
+                <select style={{ ...s.input, marginTop: 4 }} value={u16AddModal.type} disabled={u16AddModal.source === "catalogue"} onChange={e => setU16AddModal({ ...u16AddModal, type: e.target.value })}>
+                  <option value="cash">Cash</option>
+                  <option value="dining">Dining</option>
+                  <option value="points">Points</option>
+                  <option value="tactical">Tactical</option>
+                  <option value="welcome">Welcome</option>
+                  <option value="birthday">Birthday</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Value ($)</label>
+                <input type="number" step="0.01" min="0" style={{ ...s.input, marginTop: 4 }} disabled={u16AddModal.source === "catalogue"} value={u16AddModal.value} onChange={e => setU16AddModal({ ...u16AddModal, value: e.target.value })} />
+              </div>
+
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Reason (required)</label>
+                <select style={{ ...s.input, marginTop: 4 }} value={u16AddModal.reason} onChange={e => setU16AddModal({ ...u16AddModal, reason: e.target.value })}>
+                  <option value="">Select…</option>
+                  <option value="Accidental claim correction">Accidental claim correction</option>
+                  <option value="Goodwill">Goodwill</option>
+                  <option value="Error correction">Error correction</option>
+                  <option value="Staff comp">Staff comp</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Notes (optional)</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={u16AddModal.notes} onChange={e => setU16AddModal({ ...u16AddModal, notes: e.target.value })} placeholder="Additional context for the audit trail" />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setU16AddModal(null)} disabled={u16InProgress} style={{ ...s.btnSm, background: "#eee", color: "#555", opacity: u16InProgress ? 0.5 : 1 }}>Cancel</button>
+              <button onClick={u16AddVoucher} disabled={u16InProgress || !u16AddModal.reason || !u16AddModal.type || !(u16AddModal.value > 0)} style={{ ...s.btn, opacity: (u16InProgress || !u16AddModal.reason || !u16AddModal.type || !(u16AddModal.value > 0)) ? 0.5 : 1 }}>
+                {u16InProgress ? "Adding…" : "Add voucher"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── U16: REMOVE VOUCHER CONFIRM MODAL ── */}
+      {u16RemoveConfirm && selected && (
+        <div style={{ ...s.modal, zIndex: 1001 }} onClick={() => !u16InProgress && setU16RemoveConfirm(null)}>
+          <div style={{ ...s.modalInner, maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+            <div style={s.h3}>Remove voucher</div>
+            <div style={{ background: "#FFEBEE", border: "1px solid #EF9A9A", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 12 }}>
+              <div style={{ fontWeight: 600, color: "#B71C1C", marginBottom: 4 }}>You are soft-deleting:</div>
+              <div style={{ color: C.text }}>
+                <strong style={{ textTransform: "capitalize" }}>{u16RemoveConfirm.voucher.type}</strong> voucher · <strong>${parseFloat(u16RemoveConfirm.voucher.value).toFixed(2)}</strong>
+              </div>
+              <div style={{ fontSize: 10.5, color: C.muted, ...s.mono, marginTop: 4 }}>#{String(u16RemoveConfirm.voucher.id).slice(0,8)}</div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                This returns the voucher to status=removed and preserves it in the audit log. It will no longer appear in the member&apos;s active wallet.
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Reason (required)</label>
+              <select style={{ ...s.input, marginTop: 4 }} value={u16RemoveConfirm.reason} onChange={e => setU16RemoveConfirm({ ...u16RemoveConfirm, reason: e.target.value })}>
+                <option value="">Select…</option>
+                <option value="Issued in error">Issued in error</option>
+                <option value="Duplicate">Duplicate</option>
+                <option value="Member request">Member request</option>
+                <option value="Fraud prevention">Fraud prevention</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Notes (optional)</label>
+              <input style={{ ...s.input, marginTop: 4 }} value={u16RemoveConfirm.notes} onChange={e => setU16RemoveConfirm({ ...u16RemoveConfirm, notes: e.target.value })} placeholder="Additional context for the audit trail" />
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setU16RemoveConfirm(null)} disabled={u16InProgress} style={{ ...s.btnSm, background: "#eee", color: "#555", opacity: u16InProgress ? 0.5 : 1 }}>Cancel</button>
+              <button onClick={u16RemoveVoucher} disabled={u16InProgress || !u16RemoveConfirm.reason} style={{ ...s.btn, background: "#D32F2F", opacity: (u16InProgress || !u16RemoveConfirm.reason) ? 0.5 : 1 }}>
+                {u16InProgress ? "Removing…" : "Confirm remove"}
               </button>
             </div>
           </div>
