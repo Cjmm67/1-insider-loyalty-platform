@@ -1635,39 +1635,240 @@ function Vouchers() {
   );
 }
 
-// ─── STAMPS ───
+// ─── U19 STAMPS ───
 function StampsTab() {
+  // Phase 1 AI assistant state (preserved)
   const [aiResult, setAiResult] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
+
+  // U19 state
+  const [config, setConfig] = useState(null);
+  const [configId, setConfigId] = useState(null);
+  const [currentAdminId, setCurrentAdminId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [inProgress, setInProgress] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+  const [draft, setDraft] = useState(null); // shadow copy for unsaved edits
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [c, a] = await Promise.all([
+        supaFetch("stamp_config?select=*&limit=1"),
+        supaFetch("admin_users?role=eq.super_admin&limit=1"),
+      ]);
+      if (Array.isArray(c) && c[0]) {
+        setConfig(c[0]);
+        setDraft({
+          cycle_length: c[0].cycle_length,
+          restriction_window_days: c[0].restriction_window_days,
+          milestones: [...(c[0].milestones || [])].map(m => ({ ...m })),
+        });
+        setConfigId(c[0].id);
+      }
+      if (Array.isArray(a) && a[0]) setCurrentAdminId(a[0].id);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]); // eslint-disable-line react-hooks/set-state-in-effect
+
+  const logAudit = async (action, before, after, reason) => {
+    if (!currentAdminId || !configId) return;
+    try {
+      await supaFetch("audit_log", {
+        method: "POST",
+        body: {
+          admin_user_id: currentAdminId,
+          entity_type: "stamp_config",
+          entity_id: String(configId),
+          action, before_value: before, after_value: after, reason,
+        },
+      });
+    } catch (e) { console.error("Audit log failed:", e); }
+  };
+
+  const saveConfig = async () => {
+    if (!draft || !configId) return;
+    // Validation
+    if (!draft.cycle_length || draft.cycle_length < 3 || draft.cycle_length > 20) { alert("Cycle length must be between 3 and 20"); return; }
+    if (!draft.restriction_window_days || draft.restriction_window_days < 0) { alert("Restriction window must be 0 or positive"); return; }
+
+    // Sanity check milestones
+    const sortedMs = [...draft.milestones].sort((a, b) => a.stamp - b.stamp);
+    for (const m of sortedMs) {
+      if (!m.stamp || m.stamp < 1 || m.stamp > draft.cycle_length) { alert(`Milestone stamp number ${m.stamp} is out of cycle range (1 to ${draft.cycle_length})`); return; }
+      if (!m.reward?.trim()) { alert(`Milestone at stamp ${m.stamp} is missing a reward description`); return; }
+    }
+
+    setInProgress(true);
+    try {
+      const before = { cycle_length: config.cycle_length, restriction_window_days: config.restriction_window_days, milestones: config.milestones };
+      const after = { cycle_length: draft.cycle_length, restriction_window_days: draft.restriction_window_days, milestones: sortedMs };
+      await supaFetch(`stamp_config?id=eq.${configId}`, { method: "PATCH", body: after });
+      await logAudit("update", before, after, null);
+      setSaveMsg("Saved — stamp programme config updated");
+      setTimeout(() => setSaveMsg(""), 3500);
+      load();
+    } catch (e) {
+      console.error("Save failed:", e);
+      alert("Save failed. Check console.");
+    }
+    setInProgress(false);
+  };
+
+  const addMilestone = () => {
+    if (!draft) return;
+    const existingStamps = draft.milestones.map(m => m.stamp);
+    let nextStamp = 1;
+    while (existingStamps.includes(nextStamp) && nextStamp <= draft.cycle_length) nextStamp++;
+    if (nextStamp > draft.cycle_length) { alert(`All ${draft.cycle_length} stamp positions already have milestones. Increase cycle length or remove one first.`); return; }
+    setDraft({ ...draft, milestones: [...draft.milestones, { stamp: nextStamp, reward: "New reward", auto_issue: false }] });
+  };
+
+  const removeMilestone = (idx) => {
+    if (!draft) return;
+    setDraft({ ...draft, milestones: draft.milestones.filter((_, i) => i !== idx) });
+  };
+
+  const updateMilestone = (idx, field, value) => {
+    if (!draft) return;
+    const updated = [...draft.milestones];
+    updated[idx] = { ...updated[idx], [field]: value };
+    setDraft({ ...draft, milestones: updated });
+  };
+
+  const hasUnsavedChanges = draft && config && (
+    draft.cycle_length !== config.cycle_length ||
+    draft.restriction_window_days !== config.restriction_window_days ||
+    JSON.stringify(draft.milestones) !== JSON.stringify(config.milestones)
+  );
+
   return (
     <div style={{ animation: "fadeIn .3s ease" }}>
       <h2 style={s.h2}>Café Stamp Programme</h2>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>$10 = 1 stamp · Café outlets only · 10-stamp cycle · All tiers</div>
-      <div style={s.bannerRed}><span>🚫</span><div><strong>Back-door Issue:</strong> Unclaimed stamps can re-trigger the same reward. Multi-txn splits ($30 across 2 txns) trigger twice.</div></div>
-      <div style={s.bannerGreen}><span>✅</span><div><strong>Workaround:</strong> Time-based claim limit (2 months). Admin manages stamps manually until POS integration.</div></div>
-      <h3 style={s.h3}>Milestones</h3>
+      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>$10 = 1 stamp · Café outlets only · All tiers</div>
+
+      {/* Always-on Eber limitation banners */}
+      <div style={s.bannerRed}><span>🚫</span><div><strong>Eber L09:</strong> Only stamps 8 and 10 can truly auto-issue via Eber. Any other milestone marked auto-issue here will actually surface via the Discover tab as a manual claim.</div></div>
+      <div style={s.bannerRed}><span>🚫</span><div><strong>Eber L10 Back-door:</strong> Unclaimed stamps can re-trigger the same reward. Multi-txn splits ($30 across 2 txns) trigger twice. The restriction window below is the workaround.</div></div>
+      <div style={s.bannerGreen}><span>✅</span><div><strong>Workaround active:</strong> time-based claim limit enforced below. Admin manages stamps manually until Agilysys/Eber POS integration lands.</div></div>
+
+      {/* ─── U19 Editable config ─── */}
+      <div style={s.card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ ...s.h3, margin: 0 }}>Programme Configuration</h3>
+          {hasUnsavedChanges && <span style={{ fontSize: 10, padding: "3px 10px", borderRadius: 8, background: "#FFF8E1", color: "#5D4037", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8 }}>Unsaved changes</span>}
+        </div>
+
+        {saveMsg && <div style={{ ...s.bannerGreen, marginBottom: 12 }}><span>✅</span><div>{saveMsg}</div></div>}
+
+        {loading || !draft ? (
+          <div style={{ display: "flex", justifyContent: "center", padding: 40 }}><Spinner /></div>
+        ) : (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Cycle length</label>
+                <input type="number" min="3" max="20" style={{ ...s.input, marginTop: 4 }} value={draft.cycle_length} onChange={e => setDraft({ ...draft, cycle_length: parseInt(e.target.value, 10) || 0 })} />
+                <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Total stamps on a card. Default 10.</div>
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Restriction window (days)</label>
+                <input type="number" min="0" max="365" style={{ ...s.input, marginTop: 4 }} value={draft.restriction_window_days} onChange={e => setDraft({ ...draft, restriction_window_days: parseInt(e.target.value, 10) || 0 })} />
+                <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>How long between claims of the same reward. Calibrated via AI Stamp Card Analyser.</div>
+              </div>
+            </div>
+
+            {/* Milestones editor */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: C.lmuted, textTransform: "uppercase", letterSpacing: 1.2 }}>Milestones ({draft.milestones.length})</div>
+              <button onClick={addMilestone} style={{ ...s.btnSm, background: "#555", fontSize: 10, padding: "4px 10px" }}>+ Add milestone</button>
+            </div>
+            {draft.milestones.length === 0 ? (
+              <div style={{ padding: 20, textAlign: "center", color: C.lmuted, fontSize: 12, background: "#fafafa", borderRadius: 8 }}>No milestones defined.</div>
+            ) : (
+              <div style={{ border: "1px solid #eee", borderRadius: 8, overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", color: C.lmuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1, background: "#fafafa" }}>
+                      <th style={{ padding: "8px 10px", width: 80 }}>Stamp</th>
+                      <th style={{ padding: "8px 10px" }}>Reward</th>
+                      <th style={{ padding: "8px 10px", width: 150 }}>Auto-issue</th>
+                      <th style={{ padding: "8px 10px", width: 50 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {draft.milestones.map((m, idx) => {
+                      // Eber L09 warn: auto-issue only works on 8 and 10
+                      const autoIssueBlocked = m.auto_issue && m.stamp !== 8 && m.stamp !== 10;
+                      return (
+                        <tr key={idx} style={{ borderTop: "1px solid #eee" }}>
+                          <td style={{ padding: "8px 10px" }}>
+                            <input type="number" min="1" max={draft.cycle_length} style={{ ...s.input, padding: "6px 8px", fontSize: 12, width: 60 }} value={m.stamp} onChange={e => updateMilestone(idx, "stamp", parseInt(e.target.value, 10) || 0)} />
+                          </td>
+                          <td style={{ padding: "8px 10px" }}>
+                            <input style={{ ...s.input, padding: "6px 10px", fontSize: 12 }} value={m.reward || ""} onChange={e => updateMilestone(idx, "reward", e.target.value)} placeholder="Reward description" />
+                          </td>
+                          <td style={{ padding: "8px 10px" }}>
+                            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, cursor: "pointer" }}>
+                              <input type="checkbox" checked={!!m.auto_issue} onChange={e => updateMilestone(idx, "auto_issue", e.target.checked)} />
+                              Auto-issue
+                            </label>
+                            {autoIssueBlocked && <div style={{ fontSize: 9.5, color: "#B71C1C", marginTop: 2 }}>⚠ Eber L09: won&apos;t actually auto-issue</div>}
+                          </td>
+                          <td style={{ padding: "8px 10px", textAlign: "center" }}>
+                            <button onClick={() => removeMilestone(idx)} style={{ background: "none", border: "none", color: "#D32F2F", cursor: "pointer", fontSize: 14 }} title="Remove">×</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+              <button onClick={() => { setDraft({ cycle_length: config.cycle_length, restriction_window_days: config.restriction_window_days, milestones: [...(config.milestones || [])].map(m => ({ ...m })) }); }} style={{ ...s.btnSm, background: "#eee", color: "#555" }} disabled={!hasUnsavedChanges || inProgress}>Discard changes</button>
+              <button onClick={saveConfig} disabled={!hasUnsavedChanges || inProgress} style={{ ...s.btn, opacity: (!hasUnsavedChanges || inProgress) ? 0.4 : 1 }}>
+                {inProgress ? "Saving…" : "Save configuration"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div style={s.bannerAmber}>
+        <span>⚠️</span>
+        <div>Config changes here are the source of truth for the Admin dashboard and Member portal UIs, but Eber backend milestone/stamp rules must be updated separately. Mismatched config will cause rewards to mis-fire or not fire.</div>
+      </div>
+
+      {/* ─── Preserved reference: visual milestone grid from Phase 1 ─── */}
+      <h3 style={s.h3}>Milestones (visual reference)</h3>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
-        {STAMPS_MILESTONES.map((st,i) => (
+        {(draft?.milestones || config?.milestones || []).slice().sort((a, b) => a.stamp - b.stamp).map((m, i) => (
           <div key={i} style={{ width: 85, height: 85, borderRadius: 12, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-            background: st.reward ? (st.auto ? "#E8F5E9" : "#FFF8E1") : "#f5f5f5", border: st.reward ? "2px solid " + (st.auto ? "#4CAF50" : "#FFB300") : "2px solid #e0e0e0" }}>
-            <div style={{ fontFamily: FONT.h, fontSize: 20, fontWeight: 700 }}>{st.s}</div>
-            {st.reward && <div style={{ fontSize: 7, textAlign: "center", padding: "0 4px", color: st.auto ? "#2E7D32" : "#F57F17", fontWeight: 600, marginTop: 2 }}>{st.auto ? "AUTO" : "MANUAL"}</div>}
-            {st.reward && <div style={{ fontSize: 7, textAlign: "center", padding: "0 4px", color: "#666" }}>{(st.reward||"").slice(0,22)}</div>}
+            background: m.reward ? (m.auto_issue ? "#E8F5E9" : "#FFF8E1") : "#f5f5f5", border: m.reward ? "2px solid " + (m.auto_issue ? "#4CAF50" : "#FFB300") : "2px solid #e0e0e0" }}>
+            <div style={{ fontFamily: FONT.h, fontSize: 20, fontWeight: 700 }}>{m.stamp}</div>
+            {m.reward && <div style={{ fontSize: 7, textAlign: "center", padding: "0 4px", color: m.auto_issue ? "#2E7D32" : "#F57F17", fontWeight: 600, marginTop: 2 }}>{m.auto_issue ? "AUTO" : "MANUAL"}</div>}
+            {m.reward && <div style={{ fontSize: 7, textAlign: "center", padding: "0 4px", color: "#666" }}>{(m.reward || "").slice(0, 22)}</div>}
           </div>
         ))}
       </div>
+
       <h3 style={s.h3}>Café Outlets</h3>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
-        {CAFE_OUTLETS.map((o,i) => (
+        {CAFE_OUTLETS.map((o, i) => (
           <div key={i} style={{ ...s.card, display: "flex", alignItems: "center", gap: 12, padding: 14 }}>
             <span style={{ fontSize: 20 }}>☕</span>
             <div><div style={{ fontWeight: 600, fontSize: 13 }}>{o.name}</div><div style={{ fontSize: 11, color: C.muted }}>{o.location}</div></div>
           </div>
         ))}
       </div>
+
       <div style={s.aiPanel}>
         <div style={s.aiBadge}>✦ AI STAMP CARD ANALYSER</div>
-        <p style={{ fontSize: 13, color: "#ccc", margin: "12px 0" }}>Analyse café spending patterns to calibrate the time-based restriction window.</p>
+        <p style={{ fontSize: 13, color: "#ccc", margin: "12px 0" }}>Analyse café spending patterns to calibrate the time-based restriction window above.</p>
         <button onClick={async () => { setAiLoading(true); setAiResult(await askClaude(SYS_STAMP, "Analyse typical Wildseed Café spending: avg check $18-25, regulars 2-3x/month. Recommend optimal restriction window.")); setAiLoading(false); }} disabled={aiLoading} style={{ ...s.btn, opacity: aiLoading ? 0.5 : 1 }}>{aiLoading ? "Analysing…" : "Run Analysis"}</button>
         {aiResult && <pre style={{ marginTop: 16, fontSize: 12, lineHeight: 1.6, color: "#eee", whiteSpace: "pre-wrap", fontFamily: FONT.b }}>{aiResult}</pre>}
       </div>
@@ -1675,31 +1876,222 @@ function StampsTab() {
   );
 }
 
-// ─── TIERS ───
+// ─── U20 TIERS ───
 function TiersTab({ members }) {
+  const [tiersData, setTiersData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null); // tier being edited
+  const [newBenefit, setNewBenefit] = useState("");
+  const [currentAdminId, setCurrentAdminId] = useState(null);
+  const [inProgress, setInProgress] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [t, a] = await Promise.all([
+        supaFetch("tiers?select=*&order=annual_fee.asc"),
+        supaFetch("admin_users?role=eq.super_admin&limit=1"),
+      ]);
+      if (Array.isArray(t)) setTiersData(t);
+      if (Array.isArray(a) && a[0]) setCurrentAdminId(a[0].id);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]); // eslint-disable-line react-hooks/set-state-in-effect
+
+  const logAudit = async (tierId, before, after, reason) => {
+    if (!currentAdminId) return;
+    try {
+      await supaFetch("audit_log", {
+        method: "POST",
+        body: {
+          admin_user_id: currentAdminId,
+          entity_type: "tier",
+          entity_id: String(tierId),
+          action: "update",
+          before_value: before,
+          after_value: after,
+          reason,
+        },
+      });
+    } catch (e) { console.error("Audit log failed:", e); }
+  };
+
+  const saveTier = async () => {
+    if (!editing) return;
+    // Validation
+    if (!editing.name?.trim()) { alert("Name is required"); return; }
+    if (editing.annual_fee == null || editing.annual_fee < 0) { alert("Annual fee must be 0 or positive"); return; }
+    if (!editing.earn_multiplier || editing.earn_multiplier <= 0) { alert("Earn multiplier must be greater than 0"); return; }
+    if (editing.birthday_discount_pct == null || editing.birthday_discount_pct < 0 || editing.birthday_discount_pct > 100) { alert("Birthday discount must be 0–100"); return; }
+    if (editing.voucher_count == null || editing.voucher_count < 0) { alert("Voucher count must be 0 or positive"); return; }
+    if (editing.voucher_value == null || editing.voucher_value < 0) { alert("Voucher value must be 0 or positive"); return; }
+
+    setInProgress(true);
+    try {
+      const before = tiersData.find(t => t.id === editing.id);
+      const body = {
+        name: editing.name.trim(),
+        annual_fee: parseFloat(editing.annual_fee),
+        earn_multiplier: parseFloat(editing.earn_multiplier),
+        birthday_discount_pct: parseFloat(editing.birthday_discount_pct),
+        voucher_count: parseInt(editing.voucher_count, 10),
+        voucher_value: parseFloat(editing.voucher_value),
+        non_stop_hits: !!editing.non_stop_hits,
+        benefits: editing.benefits,
+      };
+      await supaFetch(`tiers?id=eq.${editing.id}`, { method: "PATCH", body });
+      await logAudit(editing.id, before, { ...before, ...body }, null);
+      setSaveMsg(`${editing.name} tier updated — remember to sync Eber backend`);
+      setTimeout(() => setSaveMsg(""), 4000);
+      setEditing(null);
+      load();
+    } catch (e) {
+      console.error("Save failed:", e);
+      alert("Save failed. Check console.");
+    }
+    setInProgress(false);
+  };
+
   return (
     <div style={{ animation: "fadeIn .3s ease" }}>
-      <h2 style={s.h2}>Membership Tiers</h2>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        {TIERS_DATA.map(t => {
-          var count = members.filter(m => m.tier===t.id).length;
-          var tier = TIER[t.id]; var dark = ["platinum","corporate","staff"].includes(t.id);
-          return (
-            <div key={t.id} style={{ background: tier.grad, borderRadius: 16, padding: 24, color: dark ? "#fff" : C.text, position: "relative" }}>
-              {t.paid && <div style={{ position: "absolute", top: 12, right: 12, background: "rgba(255,255,255,.2)", borderRadius: 8, padding: "3px 10px", fontSize: 10, fontWeight: 600 }}>{t.fee ? "$"+t.fee+"/yr" : "Invite"}</div>}
-              <div style={{ fontFamily: FONT.h, fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.name}</div>
-              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 16 }}>{count} member{count!==1?"s":""}</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
-                {[{l:"Earn",v:t.earn},{l:"Birthday",v:t.bday},{l:"Vouchers",v:t.vouchers}].map((k,i) => (
-                  <div key={i}><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, opacity: .7 }}>{k.l}</div><div style={{ fontWeight: 600, fontSize: 13 }}>{k.v}</div></div>
-                ))}
-              </div>
-              <div style={{ fontSize: 11.5, lineHeight: 1.8, opacity: 0.9 }}>{t.benefits.map((b,i) => <div key={i}>• {b}</div>)}</div>
-              {t.nonStop && <div style={{ marginTop: 12, background: "rgba(255,255,255,.15)", borderRadius: 8, padding: "6px 12px", fontSize: 11, fontWeight: 600 }}>🔄 Non-Stop Hits</div>}
-            </div>
-          );
-        })}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16 }}>
+        <h2 style={{ ...s.h2, marginBottom: 0 }}>Membership Tiers</h2>
+        <div style={{ fontSize: 11, color: C.muted }}>Click a tier to edit</div>
       </div>
+
+      {saveMsg && <div style={s.bannerGreen}><span>✅</span><div>{saveMsg}</div></div>}
+
+      <div style={s.bannerAmber}>
+        <span>⚠️</span>
+        <div><strong>Eber sync required:</strong> changes here update the 1-Insider source of truth, but the Eber backend tier configuration (earn multiplier rules, voucher triggers, birthday discount mechanics) must be updated separately. This panel records intent; Eber executes.</div>
+      </div>
+
+      {loading ? (
+        <div style={{ display: "flex", justifyContent: "center", padding: 40 }}><Spinner /></div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {tiersData.map(t => {
+            const count = members.filter(m => m.tier === t.id).length;
+            const tierTheme = TIER[t.id] || TIER.silver;
+            const dark = ["platinum", "corporate", "staff"].includes(t.id);
+            return (
+              <div key={t.id}
+                onClick={() => setEditing({ ...t, benefits: [...(t.benefits || [])] })}
+                style={{
+                  background: tierTheme.grad,
+                  borderRadius: 16, padding: 24,
+                  color: dark ? "#fff" : C.text,
+                  position: "relative",
+                  cursor: "pointer",
+                  transition: "transform .15s, box-shadow .15s",
+                }}
+                onMouseEnter={e => e.currentTarget.style.transform = "translateY(-2px)"}
+                onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
+              >
+                <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 6, alignItems: "center" }}>
+                  {t.annual_fee > 0 && <div style={{ background: "rgba(255,255,255,.2)", borderRadius: 8, padding: "3px 10px", fontSize: 10, fontWeight: 600 }}>${t.annual_fee}/yr</div>}
+                  <div style={{ background: "rgba(255,255,255,.2)", borderRadius: 8, padding: "3px 8px", fontSize: 10, fontWeight: 600 }}>✎ Edit</div>
+                </div>
+                <div style={{ fontFamily: FONT.h, fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{t.name}</div>
+                <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 16 }}>{count} member{count !== 1 ? "s" : ""}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+                  <div><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, opacity: .7 }}>Earn</div><div style={{ fontWeight: 600, fontSize: 13 }}>{t.earn_multiplier}×</div></div>
+                  <div><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, opacity: .7 }}>Birthday</div><div style={{ fontWeight: 600, fontSize: 13 }}>{t.birthday_discount_pct}%</div></div>
+                  <div><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, opacity: .7 }}>Vouchers</div><div style={{ fontWeight: 600, fontSize: 13 }}>{t.voucher_count}×${t.voucher_value}</div></div>
+                </div>
+                <div style={{ fontSize: 11.5, lineHeight: 1.8, opacity: 0.9 }}>
+                  {(t.benefits || []).slice(0, 5).map((b, i) => <div key={i}>• {b}</div>)}
+                  {(t.benefits || []).length > 5 && <div style={{ opacity: 0.6, fontSize: 10.5 }}>+{(t.benefits || []).length - 5} more</div>}
+                </div>
+                {t.non_stop_hits && <div style={{ marginTop: 12, background: "rgba(255,255,255,.15)", borderRadius: 8, padding: "6px 12px", fontSize: 11, fontWeight: 600, display: "inline-block" }}>🔄 Non-Stop Hits enabled</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ─── U20 Edit Modal ─── */}
+      {editing && (
+        <div style={s.modal} onClick={() => !inProgress && setEditing(null)}>
+          <div style={{ ...s.modalInner, maxWidth: 640 }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={s.h3}>Edit tier: {editing.name}</div>
+              <span style={s.badge(editing.id)}>{editing.id}</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Display name</label>
+                <input style={{ ...s.input, marginTop: 4 }} value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Annual fee (SGD)</label>
+                <input type="number" step="1" min="0" style={{ ...s.input, marginTop: 4, ...s.mono }} value={editing.annual_fee || 0} onChange={e => setEditing({ ...editing, annual_fee: e.target.value })} />
+                <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>0 for free tiers (Silver/Staff)</div>
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Earn multiplier</label>
+                <input type="number" step="0.1" min="0" style={{ ...s.input, marginTop: 4, ...s.mono }} value={editing.earn_multiplier || 0} onChange={e => setEditing({ ...editing, earn_multiplier: e.target.value })} />
+                <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>$1 = {editing.earn_multiplier || 0} pts</div>
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Birthday discount %</label>
+                <input type="number" step="1" min="0" max="100" style={{ ...s.input, marginTop: 4, ...s.mono }} value={editing.birthday_discount_pct || 0} onChange={e => setEditing({ ...editing, birthday_discount_pct: e.target.value })} />
+              </div>
+              <div />
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Voucher count (per set)</label>
+                <input type="number" step="1" min="0" style={{ ...s.input, marginTop: 4, ...s.mono }} value={editing.voucher_count || 0} onChange={e => setEditing({ ...editing, voucher_count: e.target.value })} />
+              </div>
+              <div>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Voucher value (SGD each)</label>
+                <input type="number" step="1" min="0" style={{ ...s.input, marginTop: 4, ...s.mono }} value={editing.voucher_value || 0} onChange={e => setEditing({ ...editing, voucher_value: e.target.value })} />
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                  <input type="checkbox" checked={!!editing.non_stop_hits} onChange={e => setEditing({ ...editing, non_stop_hits: e.target.checked })} />
+                  <span>Non-Stop Hits enabled (unlimited voucher refill via Discover tab)</span>
+                </label>
+              </div>
+
+              {/* Benefits editor */}
+              <div style={{ gridColumn: "span 2" }}>
+                <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Benefits ({(editing.benefits || []).length})</label>
+                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                  <input style={{ ...s.input, flex: 1 }} value={newBenefit} onChange={e => setNewBenefit(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newBenefit.trim()) { setEditing({ ...editing, benefits: [...(editing.benefits || []), newBenefit.trim()] }); setNewBenefit(""); } }} placeholder="Type a benefit and press Enter" />
+                  <button onClick={() => { if (newBenefit.trim()) { setEditing({ ...editing, benefits: [...(editing.benefits || []), newBenefit.trim()] }); setNewBenefit(""); } }} style={{ ...s.btnSm, padding: "0 14px" }}>+ Add</button>
+                </div>
+                {(editing.benefits || []).length > 0 && (
+                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+                    {editing.benefits.map((b, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "#fafafa", borderRadius: 6, padding: "6px 10px", fontSize: 12 }}>
+                        <span style={{ color: C.gold }}>✦</span>
+                        <span style={{ flex: 1 }}>{b}</span>
+                        <span onClick={() => setEditing({ ...editing, benefits: editing.benefits.filter((_, j) => j !== i) })} style={{ cursor: "pointer", color: "#D32F2F", fontSize: 14, fontWeight: 600 }}>×</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ ...s.bannerRed, marginTop: 16 }}>
+              <span>🚫</span>
+              <div><strong>Mechanical changes require Eber sync.</strong> Updating earn multiplier, voucher mechanics, or Non-Stop Hits here will NOT automatically propagate to Eber. Update Eber backend separately before considering this change live.</div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setEditing(null)} disabled={inProgress} style={{ ...s.btnSm, background: "#eee", color: "#555", opacity: inProgress ? 0.5 : 1 }}>Cancel</button>
+              <button onClick={saveTier} disabled={inProgress} style={{ ...s.btn, opacity: inProgress ? 0.5 : 1 }}>
+                {inProgress ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
