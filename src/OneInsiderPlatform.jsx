@@ -239,12 +239,19 @@ function Overview({ members, transactions, campaigns }) {
   );
 }
 
-// ─── MEMBERS (with stamp/voucher management) ───
+// ─── MEMBERS (with stamp/voucher management + U17 profile editing) ───
 function Members({ members, transactions, reload }) {
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("all");
   const [selected, setSelected] = useState(null);
   const [actionMsg, setActionMsg] = useState("");
+
+  // U17 state
+  const [editingProfile, setEditingProfile] = useState(null); // working copy of member while editing
+  const [tierDowngradeConfirm, setTierDowngradeConfirm] = useState(null); // { fromTier, toTier, reason }
+  const [saveInProgress, setSaveInProgress] = useState(false);
+  const [u17Stores, setU17Stores] = useState([]);
+  const [u17CurrentAdminId, setU17CurrentAdminId] = useState(null);
 
   const filtered = members.filter(m => {
     const ms = !search || (m.name||"").toLowerCase().includes(search.toLowerCase()) || (m.id||"").toLowerCase().includes(search.toLowerCase()) || (m.mobile||"").includes(search);
@@ -255,6 +262,35 @@ function Members({ members, transactions, reload }) {
   const tierData = selected ? TIERS_DATA.find(t => t.id === selected.tier) : null;
 
   const flash = (msg) => { setActionMsg(msg); setTimeout(() => setActionMsg(""), 3000); };
+
+  // U17: lazy-load stores + super admin for attribution when edit modal first opens
+  useEffect(() => {
+    if (editingProfile && u17Stores.length === 0) {
+      (async () => {
+        const [st, ad] = await Promise.all([
+          supaFetch("stores?select=id,name&status=eq.active&order=name.asc"),
+          supaFetch("admin_users?role=eq.super_admin&limit=1"),
+        ]);
+        if (Array.isArray(st)) setU17Stores(st);
+        if (Array.isArray(ad) && ad[0]) setU17CurrentAdminId(ad[0].id);
+      })();
+    }
+  }, [editingProfile, u17Stores.length]);
+
+  const u17LogAudit = async (memberId, action, before, after, reason) => {
+    if (!u17CurrentAdminId) { console.warn("Audit log skipped — no admin attribution available"); return; }
+    try {
+      await supaFetch("audit_log", {
+        method: "POST",
+        body: {
+          admin_user_id: u17CurrentAdminId,
+          entity_type: "member",
+          entity_id: String(memberId),
+          action, before_value: before, after_value: after, reason,
+        },
+      });
+    } catch (e) { console.error("Audit log failed:", e); }
+  };
 
   // ── Admin Actions ──
   const deductStamp = async () => {
@@ -354,7 +390,10 @@ function Members({ members, transactions, reload }) {
                 <div style={{ fontFamily: FONT.h, fontSize: 20, fontWeight: 600 }}>{selected.name}</div>
                 <div style={{ ...s.mono, color: C.muted, marginTop: 2 }}>{selected.id} · {selected.mobile}</div>
               </div>
-              <span style={s.badge(selected.tier)}>{selected.tier}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button onClick={() => setEditingProfile({ ...selected })} style={{ ...s.btnSm, background: "#555" }}>✎ Edit Profile</button>
+                <span style={s.badge(selected.tier)}>{selected.tier}</span>
+              </div>
             </div>
 
             {/* Action feedback */}
@@ -452,8 +491,247 @@ function Members({ members, transactions, reload }) {
           </div>
         </div>
       )}
+
+      {/* ── U17: EDIT PROFILE MODAL ── */}
+      {editingProfile && selected && (
+        <div style={{ ...s.modal, zIndex: 1001 }} onClick={() => !saveInProgress && setEditingProfile(null)}>
+          <div style={{ ...s.modalInner, maxWidth: 720 }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <div style={s.h3}>Edit Profile: {selected.name}</div>
+                <div style={{ ...s.mono, color: C.muted, fontSize: 11, marginTop: 2 }}>{selected.id}</div>
+              </div>
+              <span style={s.badge(selected.tier)}>{selected.tier}</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 20 }}>
+              {/* Left: editable fields */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div style={{ gridColumn: "span 2" }}>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Name</label>
+                  <input style={{ ...s.input, marginTop: 4 }} value={editingProfile.name || ""} onChange={e => setEditingProfile({ ...editingProfile, name: e.target.value })} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Mobile</label>
+                  <input style={{ ...s.input, marginTop: 4, ...s.mono }} value={editingProfile.mobile || ""} onChange={e => setEditingProfile({ ...editingProfile, mobile: e.target.value })} placeholder="+65 XXXX XXXX" />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Email</label>
+                  <input style={{ ...s.input, marginTop: 4 }} type="email" value={editingProfile.email || ""} onChange={e => setEditingProfile({ ...editingProfile, email: e.target.value })} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Birthday Month</label>
+                  <select style={{ ...s.input, marginTop: 4 }} value={editingProfile.birthday_month || ""} onChange={e => setEditingProfile({ ...editingProfile, birthday_month: e.target.value ? parseInt(e.target.value) : null })}>
+                    <option value="">—</option>
+                    {["January","February","March","April","May","June","July","August","September","October","November","December"].map((m,i) => (
+                      <option key={i+1} value={i+1}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Category Preference</label>
+                  <select style={{ ...s.input, marginTop: 4 }} value={editingProfile.category_pref || ""} onChange={e => setEditingProfile({ ...editingProfile, category_pref: e.target.value || null })}>
+                    <option value="">—</option>
+                    <option value="cafes">Cafés</option>
+                    <option value="restaurants">Restaurants</option>
+                    <option value="bars">Bars</option>
+                    <option value="wines">Wines</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Favourite Venue</label>
+                  <select style={{ ...s.input, marginTop: 4 }} value={editingProfile.favourite_venue || ""} onChange={e => setEditingProfile({ ...editingProfile, favourite_venue: e.target.value || null })}>
+                    <option value="">—</option>
+                    {u17Stores.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Tier</label>
+                  <select style={{ ...s.input, marginTop: 4 }} value={editingProfile.tier || "silver"} onChange={e => setEditingProfile({ ...editingProfile, tier: e.target.value })}>
+                    {["silver","gold","platinum","corporate","staff"].map(t => <option key={t} value={t}>{t[0].toUpperCase() + t.slice(1)}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Membership Expiry</label>
+                  <input style={{ ...s.input, marginTop: 4 }} type="date" value={editingProfile.membership_expiry ? editingProfile.membership_expiry.slice(0,10) : ""} onChange={e => setEditingProfile({ ...editingProfile, membership_expiry: e.target.value ? e.target.value + "T00:00:00Z" : null })} disabled={!["gold","platinum","corporate"].includes(editingProfile.tier)} />
+                  {!["gold","platinum","corporate"].includes(editingProfile.tier) && <div style={{ fontSize: 10, color: C.lmuted, marginTop: 4 }}>Disabled for {editingProfile.tier} tier (no expiry)</div>}
+                </div>
+              </div>
+
+              {/* Right: warnings panel (dynamic based on diffs) */}
+              <div style={{ background: "#FAFAFA", borderRadius: 10, padding: 14, border: "1px solid #eee" }}>
+                <div style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Warnings</div>
+                {(() => {
+                  const warnings = [];
+                  if (editingProfile.mobile !== selected.mobile) {
+                    warnings.push({ icon: "⚠️", text: "Mobile number change. Eber restriction: one mobile = one account. Confirm the member does not already have an account on the new number." });
+                  }
+                  if (editingProfile.email !== selected.email && selected.email) {
+                    warnings.push({ icon: "ℹ️", text: "Email change. Email is not used for OTP (Eber L03 — mobile only). Email OTP is an open dev request with Eber." });
+                  }
+                  if (editingProfile.tier !== selected.tier) {
+                    const tierRank = { silver: 0, staff: 0, corporate: 1, gold: 1, platinum: 2 };
+                    if (tierRank[editingProfile.tier] < tierRank[selected.tier]) {
+                      warnings.push({ icon: "🚫", text: `Downgrade from ${selected.tier} to ${editingProfile.tier}. This will trigger a confirmation modal with impact breakdown before save.` });
+                    } else {
+                      warnings.push({ icon: "⚠️", text: `Tier change: ${selected.tier} → ${editingProfile.tier}. Matching Eber backend configuration required.` });
+                    }
+                  }
+                  if (warnings.length === 0) {
+                    return <div style={{ fontSize: 11.5, color: C.lmuted, fontStyle: "italic" }}>No warnings. Changes will write to Supabase with an audit_log entry.</div>;
+                  }
+                  return warnings.map((w, i) => (
+                    <div key={i} style={{ display: "flex", gap: 8, fontSize: 11.5, color: C.text, lineHeight: 1.5, marginBottom: 10, paddingBottom: 10, borderBottom: i < warnings.length - 1 ? "1px solid #eee" : "none" }}>
+                      <span style={{ flexShrink: 0 }}>{w.icon}</span>
+                      <span>{w.text}</span>
+                    </div>
+                  ));
+                })()}
+              </div>
+            </div>
+
+            <div style={{ ...s.bannerAmber, marginTop: 16 }}>
+              <span>⚠️</span>
+              <div>Remember to sync any tier or mobile change to the Eber backend. This dashboard is 1-Insider&apos;s source of truth — not Eber&apos;s.</div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setEditingProfile(null)} disabled={saveInProgress} style={{ ...s.btnSm, background: "#eee", color: "#555", opacity: saveInProgress ? 0.5 : 1 }}>Cancel</button>
+              <button
+                disabled={saveInProgress}
+                onClick={async () => {
+                  // Validation
+                  if (!editingProfile.name?.trim()) { alert("Name is required"); return; }
+                  if (editingProfile.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editingProfile.email)) { alert("Email format invalid"); return; }
+                  if (editingProfile.mobile && !/^\+65/.test(editingProfile.mobile.replace(/\s+/g, ""))) {
+                    if (!window.confirm(`Mobile '${editingProfile.mobile}' doesn't start with +65. Save anyway?`)) return;
+                  }
+                  if (editingProfile.birthday_month && (editingProfile.birthday_month < 1 || editingProfile.birthday_month > 12)) { alert("Birthday month must be 1–12"); return; }
+
+                  // Collision checks
+                  if (editingProfile.email && editingProfile.email !== selected.email) {
+                    const collision = members.find(m => m.id !== selected.id && m.email === editingProfile.email);
+                    if (collision) { alert(`Email already used by ${collision.name} (${collision.id})`); return; }
+                  }
+                  if (editingProfile.mobile && editingProfile.mobile !== selected.mobile) {
+                    const collision = members.find(m => m.id !== selected.id && m.mobile === editingProfile.mobile);
+                    if (collision) { alert(`Mobile already used by ${collision.name} (${collision.id})`); return; }
+                  }
+
+                  // Tier downgrade intercept
+                  const tierRank = { silver: 0, staff: 0, corporate: 1, gold: 1, platinum: 2 };
+                  if (editingProfile.tier !== selected.tier && tierRank[editingProfile.tier] < tierRank[selected.tier]) {
+                    setTierDowngradeConfirm({ fromTier: selected.tier, toTier: editingProfile.tier, reason: "" });
+                    return;
+                  }
+
+                  // Direct save (no downgrade)
+                  await performProfileSave(null);
+                }}
+                style={s.btn}
+              >{saveInProgress ? "Saving…" : "Save changes"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── U17: TIER DOWNGRADE CONFIRMATION ── */}
+      {tierDowngradeConfirm && selected && editingProfile && (
+        <div style={{ ...s.modal, zIndex: 1002 }} onClick={() => !saveInProgress && setTierDowngradeConfirm(null)}>
+          <div style={{ ...s.modalInner, maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+            <div style={s.h3}>Confirm tier downgrade</div>
+            {(() => {
+              const fromData = TIERS_DATA.find(t => t.id === tierDowngradeConfirm.fromTier);
+              const toData = TIERS_DATA.find(t => t.id === tierDowngradeConfirm.toTier);
+              const impacts = [];
+              if (fromData && toData) {
+                if (fromData.earn !== toData.earn) impacts.push(`Earn rate: ${fromData.earn} → ${toData.earn}`);
+                if (fromData.bday !== toData.bday) impacts.push(`Birthday discount: ${fromData.bday} → ${toData.bday}`);
+                if (fromData.vouchers !== toData.vouchers) impacts.push(`Vouchers: ${fromData.vouchers} → ${toData.vouchers}`);
+                if (fromData.nonStop && !toData.nonStop) impacts.push("Non-Stop Hits: enabled → disabled");
+              }
+              return (
+                <>
+                  <div style={{ fontSize: 13, color: C.text, marginBottom: 12 }}>
+                    Downgrading <strong>{selected.name}</strong> from <span style={s.badge(tierDowngradeConfirm.fromTier)}>{tierDowngradeConfirm.fromTier}</span> to <span style={s.badge(tierDowngradeConfirm.toTier)}>{tierDowngradeConfirm.toTier}</span>.
+                  </div>
+                  <div style={{ background: "#FFEBEE", border: "1px solid #EF9A9A", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#B71C1C", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>Impact</div>
+                    {impacts.length === 0 ? (
+                      <div style={{ fontSize: 12, color: C.muted }}>No mechanical differences between these tiers.</div>
+                    ) : (
+                      <ul style={{ paddingLeft: 18, fontSize: 12, color: "#B71C1C", margin: 0 }}>
+                        {impacts.map((imp, i) => <li key={i} style={{ marginBottom: 3 }}>{imp}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+            <div>
+              <label style={{ fontSize: 10.5, color: C.lmuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Reason (required)</label>
+              <input style={{ ...s.input, marginTop: 4 }} value={tierDowngradeConfirm.reason} onChange={e => setTierDowngradeConfirm({ ...tierDowngradeConfirm, reason: e.target.value })} placeholder="e.g. Member requested, Lapsed payment, Correction of error…" />
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setTierDowngradeConfirm(null)} disabled={saveInProgress} style={{ ...s.btnSm, background: "#eee", color: "#555", opacity: saveInProgress ? 0.5 : 1 }}>Cancel</button>
+              <button
+                disabled={saveInProgress || !tierDowngradeConfirm.reason?.trim()}
+                onClick={async () => {
+                  await performProfileSave(tierDowngradeConfirm.reason);
+                }}
+                style={{ ...s.btn, background: "#D32F2F", opacity: (!tierDowngradeConfirm.reason?.trim() || saveInProgress) ? 0.5 : 1 }}
+              >
+                {saveInProgress ? "Saving…" : `Confirm downgrade to ${tierDowngradeConfirm.toTier}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+
+  // U17: profile save executor (called from main Save or after downgrade confirm)
+  async function performProfileSave(reason) {
+    if (!selected || !editingProfile) return;
+    setSaveInProgress(true);
+    try {
+      // Compute diff — only changed fields written
+      const EDITABLE = ["name", "mobile", "email", "birthday_month", "category_pref", "favourite_venue", "tier", "membership_expiry"];
+      const before = {};
+      const after = {};
+      const patch = {};
+      for (const k of EDITABLE) {
+        const b = selected[k] ?? null;
+        const a = editingProfile[k] ?? null;
+        if (JSON.stringify(b) !== JSON.stringify(a)) {
+          before[k] = b;
+          after[k] = a;
+          patch[k] = a;
+        }
+      }
+      if (Object.keys(patch).length === 0) {
+        flash("No changes to save");
+        setSaveInProgress(false);
+        setEditingProfile(null);
+        setTierDowngradeConfirm(null);
+        return;
+      }
+
+      await supaFetch(`members?id=eq.${selected.id}`, { method: "PATCH", body: patch });
+      await u17LogAudit(selected.id, "update", before, after, reason);
+
+      const changedCount = Object.keys(patch).length;
+      flash(`Profile updated (${changedCount} ${changedCount === 1 ? "field" : "fields"} changed) — audit logged`);
+      reload();
+      setSelected(prev => prev ? { ...prev, ...patch } : null);
+      setEditingProfile(null);
+      setTierDowngradeConfirm(null);
+    } catch (e) {
+      console.error("Profile save failed:", e);
+      alert("Save failed. Changes preserved locally — try again.");
+    }
+    setSaveInProgress(false);
+  }
 }
 
 // ─── VOUCHERS ───
