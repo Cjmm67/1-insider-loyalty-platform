@@ -254,20 +254,19 @@ function RedemptionsByVenue() {
   const [sortDir, setSortDir] = useState("desc");
   const [includePseudo, setIncludePseudo] = useState(false); // "1-Insider Vouchers" etc.
 
-  // Compute cutoff date for server-side filter
-  const cutoffIso = (() => {
-    if (dateRange === "all") return null;
-    const now = new Date();
-    if (dateRange === "ytd") return new Date(now.getFullYear(), 0, 1).toISOString();
-    const days = parseInt(dateRange, 10);
-    const d = new Date(now);
-    d.setDate(d.getDate() - days);
-    return d.toISOString();
-  })();
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // Compute cutoff inline so the callback identity is keyed on dateRange only
+      let cutoffIso = null;
+      if (dateRange === "ytd") {
+        cutoffIso = new Date(new Date().getFullYear(), 0, 1).toISOString();
+      } else if (dateRange !== "all") {
+        const days = parseInt(dateRange, 10);
+        const d = new Date();
+        d.setDate(d.getDate() - days);
+        cutoffIso = d.toISOString();
+      }
       let path = "transactions?type=eq.redeem&order=created_at.desc";
       if (cutoffIso) path += `&created_at=gte.${cutoffIso}`;
       const [t, st] = await Promise.all([
@@ -278,7 +277,7 @@ function RedemptionsByVenue() {
       if (Array.isArray(st)) setStores(st);
     } catch (e) { console.error(e); }
     setLoading(false);
-  }, [cutoffIso]);
+  }, [dateRange]);
 
   useEffect(() => { load(); }, [load]); // eslint-disable-line react-hooks/set-state-in-effect
 
