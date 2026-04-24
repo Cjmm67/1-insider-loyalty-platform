@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, createContext, useContext, useMemo } from "react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 
 const SUPA_URL = "https://tobtmtshxgpkkucsaxyk.supabase.co";
@@ -19,8 +19,8 @@ const askClaude = async (system, user) => {
   return d.content?.map(b => b.text || "").join("\n") || "No response";
 };
 
-const C = { gold: "#C5A258", dark: "#111", bg: "#FAF8F5", text: "#1A1A1A", muted: "#888", lmuted: "#999" };
-const TIER = {
+const C_CLASSIC = { gold: "#C5A258", dark: "#111", bg: "#FAF8F5", text: "#1A1A1A", muted: "#888", lmuted: "#999" };
+const TIER_CLASSIC = {
   silver: { hex: "#A8A8A8", bg: "#F7F7F7", txt: "#666", grad: "linear-gradient(135deg,#e8e8e8,#d0d0d0)" },
   gold: { hex: "#C5A258", bg: "#FDF8EE", txt: "#8B6914", grad: "linear-gradient(135deg,#C5A258,#D4B978 50%,#A88B3A)" },
   platinum: { hex: "#5C5C5C", bg: "#2D2D2D", txt: "#fff", grad: "linear-gradient(135deg,#3a3a3a,#1a1a1a 50%,#4a4a4a)" },
@@ -81,39 +81,144 @@ const SYS_STAMP = "You are a loyalty programme analyst for 1-Group Singapore's 1
 const SYS_CAMPAIGN = "You are a loyalty campaign architect for 1-Group Singapore. 25 venues, 5 tiers. CRITICAL: Eber cannot auto-exclude promo items. When designing: define objective, specify rules to update BEFORE launch, set REVERT DATE, estimate ROI. Always flag Eber limitations.";
 const SYS_RENEWAL = "You are a premium hospitality writer for 1-Group. Write a membership renewal reminder. Warm, premium, never desperate. Include greeting, benefits they'll lose, usage stats, [RENEWAL_LINK]. Under 150 words. Sign off from The 1-Insider Team.";
 
-const s = {
-  app: { fontFamily: FONT.b, background: C.bg, color: C.text, minHeight: "100vh" },
-  header: { background: C.dark, padding: "0 24px", display: "flex", alignItems: "center", height: 56, gap: 16 },
-  logo: { fontFamily: FONT.h, color: C.gold, fontSize: 18, fontWeight: 700, letterSpacing: 1 },
-  nav: { display: "flex", gap: 2, padding: "0 24px", background: "#fff", borderBottom: "1px solid #eee", overflowX: "auto" },
-  tab: (a) => ({ padding: "12px 16px", fontSize: 12.5, fontWeight: a ? 600 : 400, color: a ? C.gold : C.muted, borderBottom: a ? "2px solid " + C.gold : "2px solid transparent", cursor: "pointer", whiteSpace: "nowrap" }),
-  page: { padding: 24, maxWidth: 1200, margin: "0 auto" },
-  card: { background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 8px rgba(0,0,0,.04)", marginBottom: 16 },
-  kpi: { background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 8px rgba(0,0,0,.04)", flex: 1, minWidth: 160 },
-  kpiVal: { fontFamily: FONT.h, fontSize: 28, fontWeight: 700 },
-  kpiLabel: { fontSize: 11, color: C.lmuted, textTransform: "uppercase", letterSpacing: 1.2, fontWeight: 600, marginBottom: 4 },
-  badge: (t) => ({ display: "inline-block", padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: TIER[t]?.bg || "#eee", color: TIER[t]?.txt || "#666" }),
-  btn: { background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
-  btnSm: { background: C.gold, color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
-  btnDanger: { background: "#D32F2F", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
-  btnSuccess: { background: "#4CAF50", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
-  input: { border: "1px solid #ddd", borderRadius: 8, padding: "10px 14px", fontSize: 13, fontFamily: FONT.b, width: "100%", boxSizing: "border-box", outline: "none" },
-  bannerRed: { background: "#FFEBEE", border: "1px solid #EF9A9A", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#B71C1C", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
-  bannerGreen: { background: "#E8F5E9", border: "1px solid #A5D6A7", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#1B5E20", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
-  bannerAmber: { background: "#FFF8E1", border: "1px solid #FFE082", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#5D4037", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
-  h2: { fontFamily: FONT.h, fontSize: 22, fontWeight: 600, marginBottom: 16 },
-  h3: { fontFamily: FONT.h, fontSize: 16, fontWeight: 600, marginBottom: 12 },
-  mono: { fontFamily: FONT.m, fontSize: 12 },
-  modal: { position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999 },
-  modalInner: { background: "#fff", borderRadius: 16, padding: 28, maxWidth: 700, width: "92%", maxHeight: "85vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,.2)" },
-  aiPanel: { background: "linear-gradient(135deg,#111,#1a180f)", borderRadius: 12, padding: 24, color: "#fff", marginTop: 16 },
-  aiBadge: { display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 10, fontSize: 9.5, fontWeight: 600, letterSpacing: 1.2, textTransform: "uppercase", background: "rgba(197,162,88,.2)", color: C.gold },
+// ─── V2 DARK TOKENS (private-club theme) ─────────────────────────────────
+// Activated when URL has ?classic=1 is absent. Preserves every Phase 2
+// behaviour — only colour tokens swap. Classic path unchanged.
+const C_V2 = {
+  gold: "#F5D7A6",   // Soft luxury gold — reads on dark backgrounds
+  dark: "#0B0D14",   // Near-black header bar
+  bg: "#0F111A",     // Deep navy page background
+  text: "#F2F3F5",   // Off-white body text
+  muted: "#8C91A0",  // Cool-grey secondary
+  lmuted: "#666D7C", // Cool-grey tertiary (uppercase labels)
 };
+const TIER_V2 = {
+  silver:    { hex: "#A8A8A8", bg: "#1F2230", txt: "#D0D4DE", grad: "linear-gradient(135deg,#e8e8e8,#d0d0d0)" },
+  gold:      { hex: "#F5D7A6", bg: "#2B2416", txt: "#F5D7A6", grad: "linear-gradient(135deg,#C5A258,#D4B978 50%,#A88B3A)" },
+  platinum:  { hex: "#8C91A0", bg: "#1A1D27", txt: "#F2F3F5", grad: "linear-gradient(135deg,#3a3a3a,#1a1a1a 50%,#4a4a4a)" },
+  corporate: { hex: "#7FA3C9", bg: "#1A2331", txt: "#B3CEFF", grad: "linear-gradient(135deg,#1A3A5C,#2A5A8C)" },
+  staff:     { hex: "#81C784", bg: "#1C2A1F", txt: "#A5D6A7", grad: "linear-gradient(135deg,#2E7D32,#4CAF50)" },
+};
+
+const V2_EXTRA = {
+  card:        "#1A1D27",
+  elevated:    "#23263A",
+  divider:     "rgba(242, 243, 245, 0.08)",
+  dividerH:    "rgba(242, 243, 245, 0.14)",
+  goldSoft:    "#FBE8C9",
+  goldBorder:  "rgba(245, 215, 166, 0.35)",
+  textOnGold:  "#1A1D27",
+};
+
+// Build a complete style object from the active token set. Signature identical
+// for classic and V2 — this is where dark-theme surfaces, borders, and
+// banner variants diverge.
+function buildStyles(C, TIER, isV2) {
+  if (isV2) {
+    return {
+      app: { fontFamily: FONT.b, background: C.bg, color: C.text, minHeight: "100vh" },
+      header: { background: C.dark, padding: "0 24px", display: "flex", alignItems: "center", height: 56, gap: 16, borderBottom: "1px solid " + V2_EXTRA.divider },
+      logo: { fontFamily: FONT.h, color: C.gold, fontSize: 18, fontWeight: 700, letterSpacing: 1 },
+      nav: { display: "flex", gap: 2, padding: "0 24px", background: "rgba(26, 29, 39, 0.88)", backdropFilter: "blur(16px) saturate(120%)", WebkitBackdropFilter: "blur(16px) saturate(120%)", borderBottom: "1px solid " + V2_EXTRA.divider, overflowX: "auto" },
+      tab: (a) => ({ padding: "12px 16px", fontSize: 12.5, fontWeight: a ? 600 : 400, color: a ? C.gold : C.muted, borderBottom: a ? "2px solid " + C.gold : "2px solid transparent", cursor: "pointer", whiteSpace: "nowrap" }),
+      page: { padding: 24, maxWidth: 1200, margin: "0 auto" },
+      card: { background: V2_EXTRA.card, borderRadius: 12, padding: 20, boxShadow: "inset 0 1px 0 rgba(242,243,245,0.04), 0 8px 24px rgba(0,0,0,0.25)", marginBottom: 16, border: "1px solid " + V2_EXTRA.divider },
+      kpi: { background: V2_EXTRA.card, borderRadius: 12, padding: 20, boxShadow: "inset 0 1px 0 rgba(242,243,245,0.04), 0 8px 24px rgba(0,0,0,0.25)", flex: 1, minWidth: 160, border: "1px solid " + V2_EXTRA.divider },
+      kpiVal: { fontFamily: FONT.h, fontSize: 28, fontWeight: 700, color: C.text },
+      kpiLabel: { fontSize: 11, color: C.lmuted, textTransform: "uppercase", letterSpacing: 1.2, fontWeight: 600, marginBottom: 4 },
+      badge: (t) => ({ display: "inline-block", padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: TIER[t]?.bg || V2_EXTRA.elevated, color: TIER[t]?.txt || C.muted, border: "1px solid " + V2_EXTRA.divider }),
+      btn: { background: C.gold, color: V2_EXTRA.textOnGold, border: "none", borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b, boxShadow: "0 4px 14px rgba(245, 215, 166, 0.2)" },
+      btnSm: { background: C.gold, color: V2_EXTRA.textOnGold, border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+      btnDanger: { background: "#E57373", color: "#1A1D27", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+      btnSuccess: { background: "#81C784", color: "#1A1D27", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+      input: { border: "1px solid " + V2_EXTRA.dividerH, borderRadius: 8, padding: "10px 14px", fontSize: 13, fontFamily: FONT.b, width: "100%", boxSizing: "border-box", outline: "none", background: V2_EXTRA.elevated, color: C.text },
+      bannerRed: { background: "rgba(239, 154, 154, 0.08)", border: "1px solid rgba(239, 154, 154, 0.35)", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#FFB4B4", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
+      bannerGreen: { background: "rgba(165, 214, 167, 0.08)", border: "1px solid rgba(165, 214, 167, 0.35)", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#A5D6A7", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
+      bannerAmber: { background: "rgba(255, 224, 130, 0.08)", border: "1px solid rgba(255, 224, 130, 0.35)", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#FFD180", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
+      h2: { fontFamily: FONT.h, fontSize: 22, fontWeight: 600, marginBottom: 16, color: C.text, letterSpacing: "-0.01em" },
+      h3: { fontFamily: FONT.h, fontSize: 16, fontWeight: 600, marginBottom: 12, color: C.text, letterSpacing: "-0.01em" },
+      mono: { fontFamily: FONT.m, fontSize: 12, color: C.text },
+      modal: { position: "fixed", inset: 0, background: "rgba(11, 13, 20, 0.72)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999 },
+      modalInner: { background: V2_EXTRA.card, borderRadius: 16, padding: 28, maxWidth: 700, width: "92%", maxHeight: "85vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,.6)", border: "1px solid " + V2_EXTRA.dividerH, color: C.text },
+      aiPanel: { background: "linear-gradient(135deg,#0B0D14,#1A1D27)", borderRadius: 12, padding: 24, color: C.text, marginTop: 16, border: "1px solid " + V2_EXTRA.goldBorder },
+      aiBadge: { display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 10, fontSize: 9.5, fontWeight: 600, letterSpacing: 1.2, textTransform: "uppercase", background: "rgba(245,215,166,.14)", color: C.gold, border: "1px solid " + V2_EXTRA.goldBorder },
+    };
+  }
+  return {
+    app: { fontFamily: FONT.b, background: C.bg, color: C.text, minHeight: "100vh" },
+    header: { background: C.dark, padding: "0 24px", display: "flex", alignItems: "center", height: 56, gap: 16 },
+    logo: { fontFamily: FONT.h, color: C.gold, fontSize: 18, fontWeight: 700, letterSpacing: 1 },
+    nav: { display: "flex", gap: 2, padding: "0 24px", background: "#fff", borderBottom: "1px solid #eee", overflowX: "auto" },
+    tab: (a) => ({ padding: "12px 16px", fontSize: 12.5, fontWeight: a ? 600 : 400, color: a ? C.gold : C.muted, borderBottom: a ? "2px solid " + C.gold : "2px solid transparent", cursor: "pointer", whiteSpace: "nowrap" }),
+    page: { padding: 24, maxWidth: 1200, margin: "0 auto" },
+    card: { background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 8px rgba(0,0,0,.04)", marginBottom: 16 },
+    kpi: { background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 8px rgba(0,0,0,.04)", flex: 1, minWidth: 160 },
+    kpiVal: { fontFamily: FONT.h, fontSize: 28, fontWeight: 700 },
+    kpiLabel: { fontSize: 11, color: C.lmuted, textTransform: "uppercase", letterSpacing: 1.2, fontWeight: 600, marginBottom: 4 },
+    badge: (t) => ({ display: "inline-block", padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: TIER[t]?.bg || "#eee", color: TIER[t]?.txt || "#666" }),
+    btn: { background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+    btnSm: { background: C.gold, color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+    btnDanger: { background: "#D32F2F", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+    btnSuccess: { background: "#4CAF50", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: FONT.b },
+    input: { border: "1px solid #ddd", borderRadius: 8, padding: "10px 14px", fontSize: 13, fontFamily: FONT.b, width: "100%", boxSizing: "border-box", outline: "none" },
+    bannerRed: { background: "#FFEBEE", border: "1px solid #EF9A9A", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#B71C1C", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
+    bannerGreen: { background: "#E8F5E9", border: "1px solid #A5D6A7", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#1B5E20", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
+    bannerAmber: { background: "#FFF8E1", border: "1px solid #FFE082", borderRadius: 10, padding: "14px 18px", fontSize: 12, color: "#5D4037", display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12, lineHeight: 1.5 },
+    h2: { fontFamily: FONT.h, fontSize: 22, fontWeight: 600, marginBottom: 16 },
+    h3: { fontFamily: FONT.h, fontSize: 16, fontWeight: 600, marginBottom: 12 },
+    mono: { fontFamily: FONT.m, fontSize: 12 },
+    modal: { position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999 },
+    modalInner: { background: "#fff", borderRadius: 16, padding: 28, maxWidth: 700, width: "92%", maxHeight: "85vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,.2)" },
+    aiPanel: { background: "linear-gradient(135deg,#111,#1a180f)", borderRadius: 12, padding: 24, color: "#fff", marginTop: 16 },
+    aiBadge: { display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 10, fontSize: 9.5, fontWeight: 600, letterSpacing: 1.2, textTransform: "uppercase", background: "rgba(197,162,88,.2)", color: C.gold },
+  };
+}
+
+// Theme context — every sub-component reads C, s, TIER from here.
+const ThemeCtx = createContext({
+  C: C_CLASSIC,
+  TIER: TIER_CLASSIC,
+  s: buildStyles(C_CLASSIC, TIER_CLASSIC, false),
+  isV2: false,
+});
+
+// Back-compat shims — any code path that didn't get a context read falls back
+// to the classic palette. Removed once every function is context-aware.
+const C = C_CLASSIC;
+const TIER = TIER_CLASSIC;
+const s = buildStyles(C_CLASSIC, TIER_CLASSIC, false);
+
+function useClassicMode() {
+  const [classic, setClassic] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("classic") === "1";
+  });
+  useEffect(() => {
+    const handler = () => {
+      const params = new URLSearchParams(window.location.search);
+      setClassic(params.get("classic") === "1");
+    };
+    window.addEventListener("popstate", handler);
+    return () => window.removeEventListener("popstate", handler);
+  }, []);
+  return classic;
+}
 
 const Spinner = () => <div style={{ width: 20, height: 20, border: "2px solid #ddd", borderTopColor: C.gold, borderRadius: "50%", animation: "spin .6s linear infinite" }} />;
 const TABS = ["Overview","Members","Vouchers","Stamps","Tiers","Promotions","Decisions","Renewals","Admin Users","Stores","Checklist"];
 
 export default function App() {
+  const classic = useClassicMode();
+  const theme = useMemo(() => {
+    const C = classic ? C_CLASSIC : C_V2;
+    const TIER = classic ? TIER_CLASSIC : TIER_V2;
+    return { C, TIER, s: buildStyles(C, TIER, !classic), isV2: !classic };
+  }, [classic]);
+  // Alias for this function body — so every existing s/C/TIER reference
+  // below picks up the active theme without touching any Phase 2 logic.
+  const { s, C, TIER } = theme;
+
   const [tab, setTab] = useState(0);
   const [members, setMembers] = useState([]);
   const [transactions, setTxns] = useState([]);
@@ -158,6 +263,7 @@ export default function App() {
   }, []);
 
   return (
+    <ThemeCtx.Provider value={theme}>
     <div style={s.app}>
       <style>{
         "@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap');" +
@@ -168,10 +274,23 @@ export default function App() {
       }</style>
       <div style={s.header}>
         <div style={s.logo}>✦ 1-INSIDER</div>
-        <div style={{ fontSize: 12, color: "#666" }}>Admin Dashboard</div>
+        <div style={{ fontSize: 12, color: classic ? "#666" : "#8C91A0" }}>Admin Dashboard</div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           {loading && <Spinner />}
-          <button onClick={load} style={{ ...s.btnSm, background: "transparent", border: "1px solid #444", color: "#aaa", fontSize: 10 }}>↻ Refresh</button>
+          <a
+            href={classic ? "?" : "?classic=1"}
+            style={{
+              padding: "4px 10px", borderRadius: 9999,
+              border: "1px solid " + (classic ? "#444" : "rgba(245,215,166,0.35)"),
+              color: classic ? "#aaa" : "#F5D7A6",
+              fontSize: 9.5, fontWeight: 600, letterSpacing: 1.2, textTransform: "uppercase",
+              textDecoration: "none", fontFamily: FONT.b, cursor: "pointer",
+              background: classic ? "transparent" : "rgba(245,215,166,0.08)",
+            }}
+          >
+            {classic ? "Classic" : "V2 · Private Club"}
+          </a>
+          <button onClick={load} style={{ ...s.btnSm, background: "transparent", border: "1px solid " + (classic ? "#444" : "rgba(242,243,245,0.14)"), color: classic ? "#aaa" : "#8C91A0", fontSize: 10 }}>↻ Refresh</button>
         </div>
       </div>
       <div style={s.nav}>
@@ -191,11 +310,13 @@ export default function App() {
         {tab===10 && <ChecklistTab />}
       </div>
     </div>
+    </ThemeCtx.Provider>
   );
 }
 
 // ─── OVERVIEW ───
 function Overview({ members, transactions, campaigns }) {
+  const { s, C, TIER } = useContext(ThemeCtx);
   const totalPts = members.reduce((a,m) => a + (m.points||0), 0);
   const totalSpend = members.reduce((a,m) => a + parseFloat(m.total_spend||0), 0);
   const tierCounts = ["silver","gold","platinum","corporate","staff"].map(t => ({ name: t[0].toUpperCase()+t.slice(1), value: members.filter(m => m.tier===t).length, fill: TIER[t]?.hex }));
@@ -245,6 +366,7 @@ function Overview({ members, transactions, campaigns }) {
 
 // ─── U15 REDEMPTIONS BY VENUE ───
 function RedemptionsByVenue() {
+  const { s, C, TIER } = useContext(ThemeCtx);
   const [txns, setTxns] = useState([]);
   const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -463,6 +585,7 @@ function RedemptionsByVenue() {
 
 // ─── MEMBERS (with stamp/voucher management + U17 profile editing) ───
 function Members({ members, transactions, reload }) {
+  const { s, C, TIER } = useContext(ThemeCtx);
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("all");
   const [selected, setSelected] = useState(null);
@@ -1246,6 +1369,7 @@ function Members({ members, transactions, reload }) {
 
 // ─── U18 VOUCHERS (Catalogue CRUD + Phase 1 reference) ───
 function Vouchers() {
+  const { s, C, TIER } = useContext(ThemeCtx);
   // Phase 1 hard-coded reference (preserved — this is the loyalty programme spec, not catalogue data)
   const voucherReference = [
     { type: "Welcome", tiers: "All tiers", trigger: "Signup", values: "Silver: $10 (min $20) · Gold/Plat/Corp: $10", auto: true },
@@ -1637,6 +1761,7 @@ function Vouchers() {
 
 // ─── U19 STAMPS ───
 function StampsTab() {
+  const { s, C, TIER } = useContext(ThemeCtx);
   // Phase 1 AI assistant state (preserved)
   const [aiResult, setAiResult] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -1878,6 +2003,7 @@ function StampsTab() {
 
 // ─── U20 TIERS ───
 function TiersTab({ members }) {
+  const { s, C, TIER } = useContext(ThemeCtx);
   const [tiersData, setTiersData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // tier being edited
@@ -2098,6 +2224,7 @@ function TiersTab({ members }) {
 
 // ─── U21 PROMOTIONS ───
 function Promotions({ campaigns }) {
+  const { s, C, TIER } = useContext(ThemeCtx);
   // AI assistant state (preserved from Phase 1)
   const [aiResult, setAiResult] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -2622,6 +2749,7 @@ function Promotions({ campaigns }) {
 
 // ─── DECISIONS ───
 function Decisions() {
+  const { s, C, TIER } = useContext(ThemeCtx);
   const [items, setItems] = useState(INIT_DECISIONS);
   return (
     <div style={{ animation: "fadeIn .3s ease" }}>
@@ -2639,6 +2767,7 @@ function Decisions() {
 
 // ─── RENEWALS ───
 function Renewals({ members }) {
+  const { s, C, TIER } = useContext(ThemeCtx);
   const [aiResult, setAiResult] = useState(""); const [aiLoading, setAiLoading] = useState(false); const [aiMem, setAiMem] = useState(null);
   const paid = members.filter(m => m.membership_expiry).sort((a,b) => new Date(a.membership_expiry)-new Date(b.membership_expiry));
   const daysUntil = d => Math.ceil((new Date(d)-new Date())/(86400000));
@@ -2691,6 +2820,7 @@ const PERMISSIONS_MATRIX = [
 ];
 
 function AdminUsersTab({ members }) {
+  const { s, C, TIER } = useContext(ThemeCtx);
   const [admins, setAdmins] = useState([]);
   const [stores, setStores] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
@@ -3117,6 +3247,7 @@ function AdminUsersTab({ members }) {
 
 // ─── CHECKLIST ───
 function ChecklistTab() {
+  const { s, C, TIER } = useContext(ThemeCtx);
   const [checks, setChecks] = useState(() => { var o = {}; Object.entries(CHECKLISTS).forEach(([c,items]) => items.forEach((_,i) => { o[c+"-"+i] = false; })); return o; });
   return (
     <div style={{ animation: "fadeIn .3s ease" }}>
@@ -3150,6 +3281,7 @@ function ChecklistTab() {
 
 // ─── U23 STORES ───
 function StoresTab() {
+  const { s, C, TIER } = useContext(ThemeCtx);
   const [stores, setStores] = useState([]);
   const [admins, setAdmins] = useState([]);
   const [loading, setLoading] = useState(true);
