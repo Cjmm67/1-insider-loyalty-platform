@@ -316,7 +316,7 @@ export default function App() {
 
 // ─── OVERVIEW ───
 function Overview({ members, transactions, campaigns }) {
-  const { s, C, TIER } = useContext(ThemeCtx);
+  const { s, C, TIER, isV2 } = useContext(ThemeCtx);
   const totalPts = members.reduce((a,m) => a + (m.points||0), 0);
   const totalSpend = members.reduce((a,m) => a + parseFloat(m.total_spend||0), 0);
   const tierCounts = ["silver","gold","platinum","corporate","staff"].map(t => ({ name: t[0].toUpperCase()+t.slice(1), value: members.filter(m => m.tier===t).length, fill: TIER[t]?.hex }));
@@ -333,20 +333,20 @@ function Overview({ members, transactions, campaigns }) {
           <h3 style={s.h3}>Tier Distribution</h3>
           <ResponsiveContainer width="100%" height={200}>
             <PieChart><Pie data={tierCounts} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2}>
-              {tierCounts.map((e,i) => <Cell key={i} fill={e.fill} />)}
-            </Pie><Tooltip /></PieChart>
+              {tierCounts.map((e,i) => <Cell key={i} fill={e.fill} stroke="none" />)}
+            </Pie><Tooltip contentStyle={isV2 ? { background: "#1A1D27", border: "1px solid rgba(242,243,245,0.14)", borderRadius: 8, color: "#F2F3F5", fontSize: 12, fontFamily: FONT.b } : undefined} itemStyle={isV2 ? { color: "#F2F3F5" } : undefined} labelStyle={isV2 ? { color: "#F5D7A6", fontWeight: 600 } : undefined} /></PieChart>
           </ResponsiveContainer>
           <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-            {tierCounts.map((t,i) => <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: t.fill }} />{t.name}: {t.value}</div>)}
+            {tierCounts.map((t,i) => <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: C.text }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: t.fill }} />{t.name}: {t.value}</div>)}
           </div>
         </div>
         <div style={s.card}>
           <h3 style={s.h3}>Recent Transactions</h3>
           <div style={{ maxHeight: 230, overflow: "auto" }}>
             {transactions.slice(0,10).map((t,i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f0f0f0", fontSize: 12 }}>
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid " + (isV2 ? "rgba(242,243,245,0.08)" : "#f0f0f0"), fontSize: 12 }}>
                 <div><span style={s.mono}>{t.member_id}</span> <span style={{ color: C.muted, marginLeft: 8 }}>{t.reward_name || t.venue}</span></div>
-                <div style={{ fontWeight: 600, color: t.points > 0 ? "#4CAF50" : t.points < 0 ? "#D32F2F" : C.muted }}>{t.points > 0 ? "+":""}{t.points} pts</div>
+                <div style={{ fontWeight: 600, color: t.points > 0 ? (isV2 ? "#A5D6A7" : "#4CAF50") : t.points < 0 ? (isV2 ? "#FFB4B4" : "#D32F2F") : C.muted }}>{t.points > 0 ? "+":""}{t.points} pts</div>
               </div>
             ))}
           </div>
@@ -366,7 +366,7 @@ function Overview({ members, transactions, campaigns }) {
 
 // ─── U15 REDEMPTIONS BY VENUE ───
 function RedemptionsByVenue() {
-  const { s, C, TIER } = useContext(ThemeCtx);
+  const { s, C, TIER, isV2 } = useContext(ThemeCtx);
   const [txns, setTxns] = useState([]);
   const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -534,12 +534,15 @@ function RedemptionsByVenue() {
               </div>
               <ResponsiveContainer width="100%" height={Math.max(240, chartData.length * 32)}>
                 <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eee" horizontal={false} />
-                  <XAxis type="number" stroke="#999" style={{ fontSize: 10 }} tickFormatter={(v) => metric === "value" ? fmtCurrency(v) : v} />
-                  <YAxis type="category" dataKey="venue" stroke="#999" style={{ fontSize: 10 }} width={140} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={isV2 ? "rgba(242,243,245,0.08)" : "#eee"} horizontal={false} />
+                  <XAxis type="number" stroke={isV2 ? "#8C91A0" : "#999"} tick={{ fill: isV2 ? "#8C91A0" : "#999", fontSize: 10 }} tickFormatter={(v) => metric === "value" ? fmtCurrency(v) : v} />
+                  <YAxis type="category" dataKey="venue" stroke={isV2 ? "#8C91A0" : "#999"} tick={{ fill: isV2 ? "#F2F3F5" : "#333", fontSize: 10 }} width={140} />
                   <Tooltip
                     formatter={(value) => [metric === "value" ? fmtCurrency(value) : value.toLocaleString(), metric === "count" ? "Redemptions" : "Value"]}
-                    contentStyle={{ borderRadius: 8, border: "1px solid #ddd", fontSize: 12 }}
+                    contentStyle={isV2 ? { background: "#1A1D27", border: "1px solid rgba(242,243,245,0.14)", borderRadius: 8, color: "#F2F3F5", fontSize: 12, fontFamily: FONT.b } : { borderRadius: 8, border: "1px solid #ddd", fontSize: 12 }}
+                    itemStyle={isV2 ? { color: "#F2F3F5" } : undefined}
+                    labelStyle={isV2 ? { color: "#F5D7A6", fontWeight: 600 } : undefined}
+                    cursor={{ fill: isV2 ? "rgba(245,215,166,0.08)" : "rgba(0,0,0,0.04)" }}
                   />
                   <Bar dataKey={metric} fill={C.gold} radius={[0, 4, 4, 0]} />
                 </BarChart>
@@ -547,29 +550,29 @@ function RedemptionsByVenue() {
             </div>
 
             {/* Right: sortable table — all venues */}
-            <div style={{ maxHeight: Math.max(240, chartData.length * 32) + 40, overflowY: "auto", border: "1px solid #eee", borderRadius: 8 }}>
+            <div style={{ maxHeight: Math.max(240, chartData.length * 32) + 40, overflowY: "auto", border: "1px solid " + (isV2 ? "rgba(242,243,245,0.08)" : "#eee"), borderRadius: 8 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
-                <thead style={{ position: "sticky", top: 0, background: "#fafafa", zIndex: 1 }}>
+                <thead style={{ position: "sticky", top: 0, background: isV2 ? "#23263A" : "#fafafa", zIndex: 1 }}>
                   <tr style={{ textAlign: "left", color: C.lmuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
-                    <th onClick={() => toggleSort("venue")} style={{ padding: "10px 8px", cursor: "pointer", borderBottom: "1px solid #eee" }}>
+                    <th onClick={() => toggleSort("venue")} style={{ padding: "10px 8px", cursor: "pointer", borderBottom: "1px solid " + (isV2 ? "rgba(242,243,245,0.08)" : "#eee") }}>
                       Venue{sortIndicator("venue")}
                     </th>
-                    <th onClick={() => toggleSort("count")} style={{ padding: "10px 8px", cursor: "pointer", textAlign: "right", borderBottom: "1px solid #eee" }}>
+                    <th onClick={() => toggleSort("count")} style={{ padding: "10px 8px", cursor: "pointer", textAlign: "right", borderBottom: "1px solid " + (isV2 ? "rgba(242,243,245,0.08)" : "#eee") }}>
                       Count{sortIndicator("count")}
                     </th>
-                    <th onClick={() => toggleSort("value")} style={{ padding: "10px 8px", cursor: "pointer", textAlign: "right", borderBottom: "1px solid #eee" }}>
+                    <th onClick={() => toggleSort("value")} style={{ padding: "10px 8px", cursor: "pointer", textAlign: "right", borderBottom: "1px solid " + (isV2 ? "rgba(242,243,245,0.08)" : "#eee") }}>
                       Value{sortIndicator("value")}
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedTable.map((r, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid #f5f5f5" }}>
-                      <td style={{ padding: "8px", fontWeight: 500 }}>
-                        {PSEUDO_VENUES.has(r.venue) && <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 6, background: "#EDE7F6", color: "#4527A0", marginRight: 4, textTransform: "uppercase", letterSpacing: 0.8 }}>sys</span>}
+                    <tr key={i} style={{ borderBottom: "1px solid " + (isV2 ? "rgba(242,243,245,0.04)" : "#f5f5f5") }}>
+                      <td style={{ padding: "8px", fontWeight: 500, color: C.text }}>
+                        {PSEUDO_VENUES.has(r.venue) && <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 6, background: isV2 ? "rgba(69, 39, 160, 0.25)" : "#EDE7F6", color: isV2 ? "#C5B4E8" : "#4527A0", marginRight: 4, textTransform: "uppercase", letterSpacing: 0.8 }}>sys</span>}
                         {r.venue}
                       </td>
-                      <td style={{ padding: "8px", textAlign: "right", fontWeight: 600 }}>{r.count}</td>
+                      <td style={{ padding: "8px", textAlign: "right", fontWeight: 600, color: C.text }}>{r.count}</td>
                       <td style={{ padding: "8px", textAlign: "right", ...s.mono, color: r.value > 0 ? C.text : C.lmuted }}>{r.value > 0 ? fmtCurrency(r.value) : "—"}</td>
                     </tr>
                   ))}
