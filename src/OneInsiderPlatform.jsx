@@ -82,8 +82,9 @@ const SYS_CAMPAIGN = "You are a loyalty campaign architect for 1-Group Singapore
 const SYS_RENEWAL = "You are a premium hospitality writer for 1-Group. Write a membership renewal reminder. Warm, premium, never desperate. Include greeting, benefits they'll lose, usage stats, [RENEWAL_LINK]. Under 150 words. Sign off from The 1-Insider Team.";
 
 // ─── V2 DARK TOKENS (private-club theme) ─────────────────────────────────
-// Activated when URL has ?classic=1 is absent. Preserves every Phase 2
-// behaviour — only colour tokens swap. Classic path unchanged.
+// Opt-in via URL ?v2=1. Classic (cream + black/gold) is the default for
+// Immelia and the review team. Both palettes are preserved so the dark
+// theme can be previewed without becoming the standard experience.
 const C_V2 = {
   gold: "#F5D7A6",   // Soft luxury gold — reads on dark backgrounds
   dark: "#0B0D14",   // Near-black header bar
@@ -189,15 +190,18 @@ const TIER = TIER_CLASSIC;
 const s = buildStyles(C_CLASSIC, TIER_CLASSIC, false);
 
 function useClassicMode() {
+  // Classic (cream + black/gold) is the default. V2 dark is opt-in via ?v2=1.
+  // This preserves both palettes so the dark theme can still be previewed
+  // without becoming the standard experience for Immelia and the review team.
   const [classic, setClassic] = useState(() => {
-    if (typeof window === "undefined") return false;
+    if (typeof window === "undefined") return true;
     const params = new URLSearchParams(window.location.search);
-    return params.get("classic") === "1";
+    return params.get("v2") !== "1";
   });
   useEffect(() => {
     const handler = () => {
       const params = new URLSearchParams(window.location.search);
-      setClassic(params.get("classic") === "1");
+      setClassic(params.get("v2") !== "1");
     };
     window.addEventListener("popstate", handler);
     return () => window.removeEventListener("popstate", handler);
@@ -278,7 +282,7 @@ export default function App() {
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           {loading && <Spinner />}
           <a
-            href={classic ? "?" : "?classic=1"}
+            href={classic ? "?v2=1" : "?"}
             style={{
               padding: "4px 10px", borderRadius: 9999,
               border: "1px solid " + (classic ? "#444" : "rgba(245,215,166,0.35)"),
